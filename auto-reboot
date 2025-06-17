@@ -1,0 +1,313 @@
+#!/bin/bash
+#shellcheck disable=SC2155
+set -euo pipefail
+PRG0=$(readlink -fn -- "$0")
+PRG=$(basename -- "$PRG0")
+
+# Configuration
+declare ok_MACHINE_REBOOT_TIME=${ok_MACHINE_REBOOT_TIME:-22:00}
+declare ok_MACHINE_UPTIME_MAXDAYS=${ok_MACHINE_UPTIME_MAXDAYS:-14}
+
+# State variables
+declare -i reboot_needed=0 dryrun=1 force_reboot=0 uptime_days=0
+declare -a allowed_days=()  # Array to store allowed days (0-6, 0=Sunday)
+
+# Parse day specification (Sun, Sunday, 0, etc.) to numeric day (0-6)
+parse_day() {
+  local day="$1"
+  case "${day,,}" in  # Convert to lowercase
+    sun|sunday|0) echo 0 ;;
+    mon|monday|1) echo 1 ;;
+    tue|tuesday|2) echo 2 ;;
+    wed|wednesday|3) echo 3 ;;
+    thu|thursday|4) echo 4 ;;
+    fri|friday|5) echo 5 ;;
+    sat|saturday|6) echo 6 ;;
+    *) echo "Error: Invalid day '$day'. Use Sun-Sat, Sunday-Saturday, or 0-6." >&2; return 1 ;;
+  esac
+}
+
+# Parse comma-separated day list and populate allowed_days array
+parse_allowed_days() {
+  local day_list="$1"
+  local day
+  allowed_days=()
+  
+  IFS=',' read -ra days <<< "$day_list"
+  for day in "${days[@]}"; do
+    day=$(echo "$day" | xargs)  # Trim whitespace
+    if parsed_day=$(parse_day "$day"); then
+      allowed_days+=("$parsed_day")
+    else
+      return 1
+    fi
+  done
+}
+
+# Check if current day is in allowed_days array
+is_reboot_day_allowed() {
+  # If no restrictions set, allow any day
+  [[ ${#allowed_days[@]} -eq 0 ]] && return 0
+  
+  local current_day=$(date +'%w')  # 0-6, 0=Sunday
+  local allowed_day
+  
+  for allowed_day in "${allowed_days[@]}"; do
+    [[ $current_day -eq $allowed_day ]] && return 0  
+  done
+  
+  return 1  # Current day not allowed
+}
+
+# Check reboot conditions
+check_reboot_conditions() {
+  # Check for reboot-required file
+  if [[ -f /var/run/reboot-required ]]; then
+    reboot_needed=1
+  fi
+  
+  # Check uptime threshold and calculate uptime days
+  local uptime_start=$(date -d "$(uptime -s)" +'%s' -u)
+  local current_time=$(date +'%s' -u)
+  uptime_days=$(((current_time - uptime_start) / 86400))
+  
+  if (( uptime_days >= ok_MACHINE_UPTIME_MAXDAYS )); then
+    reboot_needed=1
+  fi
+  
+  # Force reboot overrides conditions
+  if (( force_reboot )); then
+    reboot_needed=1
+  fi
+}
+
+# Calculate delay until reboot time, considering allowed days
+calculate_reboot_delay() {
+  local target_time="$1"
+  local current_epoch=$(date +'%s')
+  local target_epoch
+  
+  # Parse time format (HH:MM)
+  if [[ $target_time =~ ^([0-9]{1,2}):([0-9]{2})$ ]]; then
+    local hour=${BASH_REMATCH[1]}
+    local minute=${BASH_REMATCH[2]}
+    
+    # If no day restrictions, use simple logic
+    if [[ ${#allowed_days[@]} -eq 0 ]]; then
+      # Calculate target time today
+      target_epoch=$(date -d "today ${hour}:${minute}" +'%s')
+      
+      # If target time has passed today, schedule for tomorrow
+      if (( target_epoch <= current_epoch )); then
+        target_epoch=$(date -d "tomorrow ${hour}:${minute}" +'%s')
+      fi
+    else
+      # Find next allowed day at the specified time
+      local days_ahead=0
+      local current_day=$(date +'%w')
+      local found=0
+      
+      # Check today at target time if it hasn't passed and today is allowed
+      target_epoch=$(date -d "today ${hour}:${minute}" +'%s')
+      if (( target_epoch > current_epoch )) && is_reboot_day_allowed; then
+        found=1
+      fi
+      
+      # If not found, search for next allowed day (up to 7 days ahead)
+      if (( ! found )); then
+        for (( days_ahead=1; days_ahead<=7; days_ahead++ )); do
+          local check_day=$(( (current_day + days_ahead) % 7 ))
+          local allowed_day
+          
+          for allowed_day in "${allowed_days[@]}"; do
+            if [[ $check_day -eq $allowed_day ]]; then
+              target_epoch=$(date -d "+${days_ahead} days ${hour}:${minute}" +'%s')
+              found=1
+              break 2
+            fi
+          done
+        done
+      fi
+      
+      if (( ! found )); then
+        echo "Error: No valid reboot day found in next 7 days" >&2
+        return 1
+      fi
+    fi
+    
+    echo $((target_epoch - current_epoch))
+  else
+    echo "Error: Invalid time format '$target_time'. Use HH:MM format." >&2
+    return 1
+  fi
+}
+
+# Schedule reboot using systemd-run
+schedule_reboot() {
+  local delay=$1
+  local reboot_cmd="/sbin/shutdown -r now 'Scheduled reboot by $PRG'"
+  
+  # Check if systemd is available
+  if ! command -v systemd-run >/dev/null 2>&1; then
+    echo "Error: systemd-run not found. This script requires systemd for reliable scheduling." >&2
+    return 1
+  fi
+  
+  if ! systemctl is-system-running >/dev/null 2>&1; then
+    echo "Error: systemd is not running. This script requires systemd for reliable scheduling." >&2  
+    return 1
+  fi
+  
+  # Schedule reboot using systemd-run
+  if (( ! dryrun )); then
+    systemd-run --on-active="${delay}s" --timer-property=AccuracySec=1s \
+      --unit="auto-reboot-$(date +%s)" \
+      --description="Scheduled reboot by $PRG" \
+      bash -c "$reboot_cmd"
+    echo "Reboot scheduled using systemd-run in ${delay} seconds"
+  else
+    echo "[DRY RUN] Would schedule reboot using systemd-run in ${delay} seconds"
+  fi
+}
+
+main() {
+  # Show usage if help is requested, otherwise proceed with default dry-run
+  if [[ $# -eq 1 && ($1 == "-h" || $1 == "--help") ]]; then
+    usage; return 0
+  fi
+  
+  # Parse command line arguments
+  while (($#)); do 
+    case $1 in 
+      -h|--help)    
+        usage; return 0 ;;
+      -d|--dry-run|--dryrun)
+        dryrun=1 ;;
+      -N|--not-dry-run|--notdryrun)
+        dryrun=0 ;;
+      -f|--force-reboot)
+        force_reboot=1 ;;
+      --max-uptime-days)
+        [[ $# -lt 2 ]] && { echo "Error: --max-uptime-days requires an argument" >&2; return 1; }
+        if [[ $2 =~ ^[0-9]+$ ]] && [[ $2 -gt 0 ]]; then
+          ok_MACHINE_UPTIME_MAXDAYS=$2
+          shift
+        else
+          echo "Error: --max-uptime-days must be a positive integer" >&2; return 1
+        fi ;;
+      --reboot-time)
+        [[ $# -lt 2 ]] && { echo "Error: --reboot-time requires an argument" >&2; return 1; }
+        if [[ $2 =~ ^([0-9]{1,2}):([0-9]{2})$ ]]; then
+          local hour=${BASH_REMATCH[1]}
+          local minute=${BASH_REMATCH[2]}
+          if (( hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 )); then
+            ok_MACHINE_REBOOT_TIME=$2
+            shift
+          else
+            echo "Error: --reboot-time must be valid time (00:00-23:59)" >&2; return 1
+          fi
+        else
+          echo "Error: --reboot-time must be in HH:MM format" >&2; return 1
+        fi ;;
+      --allowed-days)
+        [[ $# -lt 2 ]] && { echo "Error: --allowed-days requires an argument" >&2; return 1; }
+        if ! parse_allowed_days "$2"; then
+          return 1
+        fi
+        shift ;;
+      -[hdNf]*) 
+        #shellcheck disable=SC2046
+        set -- '' $(printf -- "-%c " $(grep -o . <<<"${1:1}")) "${@:2}";;
+      *)
+        echo "Error: Unknown option '$1'" >&2
+        usage; return 1 ;;
+    esac
+    shift
+  done
+  
+  # Check conditions now that all arguments are parsed
+  check_reboot_conditions
+  
+  if ((reboot_needed)); then
+    echo "Reboot required for [$HOSTNAME]"
+    
+    if [[ -f /var/run/reboot-required ]]; then
+      echo "  Reason: System updates require reboot"
+    fi
+    
+    if (( uptime_days >= ok_MACHINE_UPTIME_MAXDAYS )); then
+      echo "  Reason: Uptime (${uptime_days} days) exceeds maximum (${ok_MACHINE_UPTIME_MAXDAYS} days)"
+    fi
+    
+    (( force_reboot )) && echo "  Reason: Force reboot requested"
+    
+    # Calculate delay and schedule reboot
+    delay=""
+    if delay=$(calculate_reboot_delay "$ok_MACHINE_REBOOT_TIME"); then
+      target_time=$(date -d "now + ${delay} seconds" +'%F %T %Z')
+      echo "  Scheduled for: $target_time"
+      
+      schedule_reboot "$delay"
+      
+      if (( dryrun )); then
+        echo "[DRY RUN] Use '$PRG -N' to execute"
+      fi
+    else
+      echo "Error: Failed to calculate reboot delay" >&2
+      return 1
+    fi
+  else
+    echo "Reboot not required for [$HOSTNAME]"
+    echo "  Uptime: $(uptime -p)"
+    if [[ -f /var/run/reboot-required ]]; then
+      echo "  Reboot required file: present"
+    else
+      echo "  Reboot required file: absent"
+    fi
+  fi
+}
+
+usage() {
+  cat << 'EOF'
+auto-reboot - Reboot machine with intelligent scheduling
+
+DESCRIPTION:
+    Reboot machine if:
+      /var/run/reboot-required exists,
+    OR if:
+      uptime > maximum uptime days.
+
+USAGE:
+    auto-reboot [OPTIONS] [-f] [-d|-N]
+
+OPTIONS:
+    -f, --force-reboot          Unconditional reboot. Ignore reboot-required and uptime.
+    -d, --dry-run               Dry run only. Do not execute (default is dry run).
+    -N, --not-dry-run           Execute (not a dry run).
+    -h, --help                  Show this help message.
+    
+    --max-uptime-days DAYS      Maximum uptime in days before forced reboot (default: 14)
+    --reboot-time HH:MM         Time to schedule reboot in HH:MM format (default: 22:00)
+    --allowed-days DAYS         Restrict reboots to specific days of week
+                                DAYS can be: Sun,Mon,Tue,Wed,Thu,Fri,Sat
+                                Or: Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday  
+                                Or: 0,1,2,3,4,5,6 (0=Sunday)
+                                Multiple days: --allowed-days Sun,Mon,Fri
+
+ENVIRONMENT VARIABLES:
+    ok_MACHINE_REBOOT_TIME      Time to schedule reboot (default: 22:00)
+                                Overridden by --reboot-time option
+    ok_MACHINE_UPTIME_MAXDAYS   Maximum uptime in days (default: 14)
+                                Overridden by --max-uptime-days option
+
+EXAMPLES:
+    auto-reboot --dry-run
+    auto-reboot --max-uptime-days 14 --reboot-time 04:20 --allowed-days Sun -N
+    auto-reboot --allowed-days Mon,Wed,Fri --reboot-time 22:30 -N
+
+EOF
+}
+
+main "$@"
+#fin
+
