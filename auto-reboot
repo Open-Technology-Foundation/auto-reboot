@@ -1,6 +1,15 @@
 #!/bin/bash
 #shellcheck disable=SC2155
 set -euo pipefail
+if ((EUID)); then
+  if id -nG "${USER:-}" | grep -qw sudo || ((EUID==0)); then
+    sudo "$0" "$@"
+    exit
+  fi
+  >&2 echo "Requires root/sudo access"
+  exit 1
+fi
+
 declare -- PRG0 PRG VERSION
 PRG0=$(readlink -fn -- "$0")
 PRG=$(basename -- "$PRG0")
@@ -13,6 +22,8 @@ declare -x MACHINE_UPTIME_MAXDAYS=${MACHINE_UPTIME_MAXDAYS:-14}
 # State variables
 declare -i reboot_needed=0 dryrun=1 force_reboot=0 uptime_days=0
 declare -a allowed_days=()  # Array to store allowed days (0-6, 0=Sunday)
+
+declare -- XUSER=${SUDO_USER:-${USER:-root}}
 
 # helper functions
 msg() {
@@ -180,7 +191,7 @@ schedule_reboot() {
   # Schedule reboot using systemd-run
   if (( ! dryrun )); then
     # Log to syslog when actually scheduling a reboot
-    logger -t "$PRG" "Scheduling system reboot in ${delay}s for user ${SUDO_USER:-$USER} (uptime: ${uptime_days}d)"
+    logger -t "$PRG" "Scheduling system reboot in ${delay}s for user $XUSER (uptime: ${uptime_days}d)"
     
     systemd-run --on-active="${delay}s" --timer-property=AccuracySec=1s \
       --unit="auto-reboot-$(date +%s)" \
@@ -229,12 +240,6 @@ list_schedules() {
 delete_schedule() {
   local timer_name="$1"
   
-  # Check for root privileges
-  if [[ $EUID -ne 0 ]]; then
-    error "Deleting timers requires root privileges. Please run with sudo."
-    return 1
-  fi
-  
   # Validate timer name format
   if [[ ! $timer_name =~ ^auto-reboot-[0-9]+\.timer$ ]]; then
     # If just the ID was provided, construct full name
@@ -262,19 +267,13 @@ delete_schedule() {
   systemctl stop "$service_name" 2>/dev/null || true
   
   # Log the deletion
-  logger -t "$PRG" "Deleted scheduled reboot timer: $timer_name by user ${SUDO_USER:-$USER}"
+  logger -t "$PRG" "Deleted scheduled reboot timer: $timer_name by user $XUSER"
   
   info "Successfully deleted $timer_name"
 }
 
 # Delete all auto-reboot timers
 delete_all_schedules() {
-  # Check for root privileges
-  if [[ $EUID -ne 0 ]]; then
-    error "Deleting timers requires root privileges. Please run with sudo."
-    return 1
-  fi
-  
   local count=0
   local timers=()
   
@@ -309,7 +308,7 @@ delete_all_schedules() {
     delete_schedule "$timer"
   done
   
-  logger -t "$PRG" "Deleted all scheduled reboot timers ($count total) by user ${SUDO_USER:-$USER}"
+  logger -t "$PRG" "Deleted all scheduled reboot timers ($count total) by user $XUSER"
   info "Deleted $count auto-reboot schedule(s)."
 }
 
@@ -332,13 +331,17 @@ install_auto_reboot() {
   info "systemd-container is installed"
 
   local localbin=/usr/local/bin/"$PRG"
-  [[ "$PRG0" == "$localbin" ]] && return 0
+  if [[ "$PRG0" != "$localbin" ]]; then
+    [[ -L $localbin ]] && rm "$localbin"
+    [[ -f $localbin ]] && rm "$localbin"
+    ln -fs "$PRG0" "$localbin"
+  fi
+  chown "$XUSER":sudo "$PRG0"
+  chmod 770 "$PRG0"
+  chown "$XUSER":sudo -h "$localbin"
+  chmod 770 "$localbin"
 
-  [[ -L $localbin ]] && rm "$localbin"
-  [[ -f $localbin ]] && rm "$localbin"
-  sudo ln -fs "$PRG0" "$localbin"
-
-  info "$PRG Installed"
+  info "$PRG is installed at $localbin"
   return 0
 }
 
@@ -474,38 +477,44 @@ DEPENDENCIES:
     systemd-run (from systemd-container)
 
 OPTIONS:
-    -f, --force-reboot  Unconditional reboot. Ignore reboot-required and uptime.
-    -n, --dry-run       Dry run only. Do not execute (default is dry run).
-    -N, --not-dry-run   Execute (not a dry run).
-    -h, --help          Show this help message.
-    -i, --install       Install auto-reboot to /usr/local/bin and dependencies.
-    -V, --version       Show version information ($VERSION).
+    -f, --force-reboot
+                  Unconditional reboot. Ignore reboot-required and uptime.
+    -n, --dry-run
+                  Dry run only. Do not execute (default is dry run).
+    -N, --not-dry-run
+                  Execute (not a dry run)
+    -h, --help    Show this help message
+    -i, --install Install auto-reboot to /usr/local/bin and dependencies
+    -V, --version Show version information
 
     -m, --max-uptime-days DAYS
-                        Maximum uptime in days before forced reboot (default: 14)
+                  Maximum uptime in days before forced reboot (default: 14)
     -r, --reboot-time HH:MM
-                        Time to schedule reboot in HH:MM format (default: 22:00)
+                  Time to schedule reboot in HH:MM format (default: 22:00)
     -a, --allowed-days DAYS
-                        Restrict reboots to specific days of week
-                        DAYS can be: Sun,Mon,Tue,Wed,Thu,Fri,Sat
-                        Or: Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday
-                        Or: 0,1,2,3,4,5,6 (0=Sunday)
-                        Multiple days: --allowed-days Sun,Mon,Fri
+                  Restrict reboots to specific days of week
+                  DAYS can be: Sun,Mon,Tue,Wed,Thu,Fri,Sat
+                  Or: Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday
+                  Or: 0,1,2,3,4,5,6 (0=Sunday)
+                  Multiple days: --allowed-days Sun,Mon,Fri
 
 SCHEDULE MANAGEMENT:
-    -l, --list          List all scheduled auto-reboot timers
-    -d, --delete TIMER  Delete a specific auto-reboot timer
-                        TIMER can be: full name (auto-reboot-1234.timer),
-                        partial name (auto-reboot-1234), or just ID (1234)
-    -D, --delete-all    Delete all scheduled auto-reboot timers
-                        (asks for confirmation)
+    -l, --list    List all scheduled auto-reboot timers
+    -d, --delete TIMER
+                  Delete a specific auto-reboot timer
+                  TIMER can be: full name (auto-reboot-1234.timer),
+                  partial name (auto-reboot-1234), or just ID (1234)
+    -D, --delete-all
+                  Delete all scheduled auto-reboot timers
+                  (asks for confirmation)
 
 ENVIRONMENT VARIABLES:
-    MACHINE_REBOOT_TIME Time to schedule reboot (default: 22:00)
-                        Overridden by --reboot-time option
+    MACHINE_REBOOT_TIME
+                  Time to schedule reboot (default: 22:00)
+                  Overridden by --reboot-time option
     MACHINE_UPTIME_MAXDAYS
-                        Maximum uptime in days (default: 14)
-                        Overridden by --max-uptime-days option
+                  Maximum uptime in days (default: 14)
+                  Overridden by --max-uptime-days option
 
 EXAMPLES:
     auto-reboot --dry-run
@@ -535,4 +544,3 @@ systemd_run_required() {
 
 main "$@"
 #fin
-

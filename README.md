@@ -1,162 +1,265 @@
 # auto-reboot
 
-A bash script for intelligent system reboots with flexible scheduling and day-of-week restrictions.
-
-**Version:** 1.0.422
+Intelligent system reboot scheduler with flexible timing and day-of-week restrictions.
 
 ## Overview
 
-`auto-reboot` automatically reboots systems when:
-- `/var/run/reboot-required` exists (indicating pending updates)
-- System uptime exceeds a configurable maximum (default: 14 days)
-- Force reboot is requested
+`auto-reboot` schedules system reboots based on:
+- System update requirements (`/var/run/reboot-required`)
+- Maximum uptime threshold (default: 14 days)
+- Manual force reboot requests
 
-The script uses systemd-run for reliable scheduling and supports flexible time and day-of-week restrictions.
+**Key features**: Automatic sudo elevation, systemd timer integration, dry-run safety, schedule management, and syslog audit trails.
 
-## Features
+## Quick Start
 
-- **Intelligent Scheduling**: Uses systemd timers for precise, reliable reboot scheduling
-- **Day-of-Week Restrictions**: Limit reboots to specific days (e.g., only weekends)
-- **Flexible Time Configuration**: Schedule reboots at any time in HH:MM format
-- **Multiple Trigger Conditions**: Reboot on system updates, uptime threshold, or force
-- **Dry Run Mode**: Safe testing mode enabled by default
-- **Comprehensive Validation**: Input validation for all parameters
-- **Self-Installation**: Built-in installation capability with dependency management
-- **Version Information**: Track script version with `-V` option
+```bash
+# Check if reboot needed (dry run by default)
+auto-reboot
 
-## Requirements
+# Schedule reboot if conditions are met
+auto-reboot -N
 
-- Linux system with systemd (required for scheduling)
-- Bash 4.0+
-- Root privileges for actual reboots
-- `systemd-run` command (provided by systemd-container package)
-- systemd must be running
+# Force reboot at 3 AM
+auto-reboot --force-reboot --reboot-time 03:00 -N
+
+# List scheduled reboots
+auto-reboot --list
+
+# Delete all scheduled reboots
+auto-reboot --delete-all
+```
 
 ## Installation
 
 ```bash
-# Quick install with automatic dependency resolution
-sudo auto-reboot --install
+# Install script and dependencies
+auto-reboot --install
 
-# Or manual installation
+# Manual installation
 sudo cp auto-reboot /usr/local/bin/
-sudo chmod +x /usr/local/bin/auto-reboot
+sudo chmod 770 /usr/local/bin/auto-reboot
+sudo chown root:sudo /usr/local/bin/auto-reboot
 ```
 
-## Usage
+## Requirements
+
+- Linux with systemd
+- Bash 4.0+
+- systemd-run (systemd-container package)
+- Membership in sudo group or root access
+
+## Command Reference
+
+### Basic Options
+
+| Option | Description |
+|--------|-------------|
+| `-n, --dry-run` | Test mode without executing (default) |
+| `-N, --not-dry-run` | Execute the reboot schedule |
+| `-f, --force-reboot` | Force reboot regardless of conditions |
+| `-h, --help` | Show help message |
+| `-V, --version` | Show version |
+| `-i, --install` | Install to /usr/local/bin |
+
+### Scheduling Options
+
+| Option | Description |
+|--------|-------------|
+| `-m, --max-uptime-days DAYS` | Max uptime before reboot (default: 14) |
+| `-r, --reboot-time HH:MM` | Schedule time (default: 22:00) |
+| `-a, --allowed-days DAYS` | Restrict to specific days |
+
+### Schedule Management
+
+| Option | Description |
+|--------|-------------|
+| `-l, --list` | Show all scheduled reboots |
+| `-d, --delete TIMER` | Delete specific timer |
+| `-D, --delete-all` | Delete all timers (with confirmation) |
+
+## Day Specifications
+
+The `--allowed-days` option accepts:
+- Short names: `Sun`, `Mon`, `Tue`, `Wed`, `Thu`, `Fri`, `Sat`
+- Full names: `Sunday`, `Monday`, etc.
+- Numbers: `0` (Sunday) through `6` (Saturday)
+- Multiple: `Mon,Wed,Fri` or `1,3,5`
+
+## Examples
+
+### Basic Usage
 
 ```bash
-# Basic usage - dry run mode (default)
+# Check reboot status
 auto-reboot
+# Output:
+# Host: server01
+# Uptime: up 15 days, 3 hours
+# Reboot-required: present
+# Status: Reboot required
+#   - Reason: System updates require reboot
+#   - Reason: Uptime (15 days) exceeds maximum (14 days)
+# Delay: 43200
+# Scheduled: 2025-07-22 22:00:00 WITA
+# auto-reboot: systemd-run: [DRY RUN] Reboot scheduled in 43200 seconds
+# auto-reboot: [DRY RUN] Use 'auto-reboot' with option '-N' to execute
 
-# Execute reboot if conditions are met
+# Actually schedule the reboot
 auto-reboot -N
-
-# Force reboot regardless of conditions
-auto-reboot --force-reboot -N
-
-# Schedule reboot only on weekends at 4 AM, max uptime 7 days
-auto-reboot --max-uptime-days 7 --reboot-time 04:00 --allowed-days Sat,Sun -N
-
-# Multiple allowed days using different formats
-auto-reboot --allowed-days Mon,Wed,Fri -N       # Short names
-auto-reboot --allowed-days 0,6 -N               # Numeric (0=Sunday)
-auto-reboot --allowed-days Sunday,Saturday -N   # Full names
-
-# Check version
-auto-reboot --version
 ```
 
-## Command Line Options
+### Weekend Maintenance
 
-| Option | Short | Description |
-|--------|-------|-------------|
-| `--help` | `-h` | Show help message |
-| `--dry-run` | `-n` | Dry run only (default) |
-| `--not-dry-run` | `-N` | Execute the reboot |
-| `--force-reboot` | `-f` | Unconditional reboot |
-| `--max-uptime-days DAYS` | `-m` | Maximum uptime before forced reboot (default: 14) |
-| `--reboot-time HH:MM` | `-r` | Time to schedule reboot (default: 22:00) |
-| `--allowed-days DAYS` | `-a` | Restrict reboots to specific weekdays |
-| `--install` | `-i` | Install script and dependencies |
-| `--version` | `-V` | Show version information |
+```bash
+# Reboot only on weekends at 3 AM
+auto-reboot --allowed-days Sat,Sun --reboot-time 03:00 -N
 
-### Day Formats
+# Reboot Sunday night/Monday morning at 1 AM
+auto-reboot --allowed-days Mon --reboot-time 01:00 -N
+```
 
-The `--allowed-days` option accepts multiple formats:
+### Uptime Management
 
-- **Short names**: `Sun`, `Mon`, `Tue`, `Wed`, `Thu`, `Fri`, `Sat`
-- **Full names**: `Sunday`, `Monday`, `Tuesday`, `Wednesday`, `Thursday`, `Friday`, `Saturday`
-- **Numeric**: `0` (Sunday) through `6` (Saturday)
-- **Multiple days**: Comma-separated list (e.g., `Mon,Wed,Fri` or `0,6`)
+```bash
+# Reboot if uptime exceeds 7 days
+auto-reboot --max-uptime-days 7 -N
+
+# Weekly reboot on Sunday at 4 AM if uptime > 7 days
+auto-reboot -m 7 -r 04:00 -a Sun -N
+```
+
+### Schedule Management
+
+```bash
+# List all scheduled reboots
+auto-reboot --list
+# Output:
+# Active auto-reboot schedules:
+# =============================
+# 1. auto-reboot-1753063354.timer - Scheduled: Mon 2025-07-21 22:00:00 WITA
+# 2. auto-reboot-1753064000.timer - Scheduled: Sun 2025-07-28 03:00:00 WITA
+# =============================
+# Total: 2 scheduled reboot(s)
+
+# Delete specific timer (using ID)
+auto-reboot --delete 1753063354
+
+# Delete all scheduled reboots
+auto-reboot -D
+# Output:
+# Found 2 auto-reboot schedule(s):
+# auto-reboot-1753063354.timer
+# auto-reboot-1753064000.timer
+# 
+# Delete all schedules? [y/N] y
+# auto-reboot: Deleting auto-reboot-1753063354.timer...
+# auto-reboot: Successfully deleted auto-reboot-1753063354.timer
+# auto-reboot: Deleting auto-reboot-1753064000.timer...
+# auto-reboot: Successfully deleted auto-reboot-1753064000.timer
+# auto-reboot: Deleted 2 auto-reboot schedule(s).
+```
+
+### Cron Integration
+
+```bash
+# Add to root's crontab
+# Daily check at 11 PM, reboot on Sunday at 4 AM if needed
+0 23 * * * /usr/local/bin/auto-reboot -m 14 -r 04:00 -a Sun -N
+
+# Check every 6 hours, reboot anytime if uptime > 30 days
+0 */6 * * * /usr/local/bin/auto-reboot -m 30 -N
+
+# Weekly forced reboot on Sunday at 3 AM
+0 2 * * 0 /usr/local/bin/auto-reboot -f -r 03:00 -N
+```
+
+### Emergency Scenarios
+
+```bash
+# Force immediate reboot (at next scheduled time)
+auto-reboot --force-reboot -N
+
+# Force reboot in 5 minutes (using custom time)
+auto-reboot -f -r $(date -d "+5 minutes" +%H:%M) -N
+
+# Cancel all pending reboots
+auto-reboot --delete-all
+```
 
 ## Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MACHINE_REBOOT_TIME` | Default reboot time in HH:MM format | `22:00` |
-| `MACHINE_UPTIME_MAXDAYS` | Default maximum uptime in days | `14` |
+| `MACHINE_REBOOT_TIME` | Default reboot time | `22:00` |
+| `MACHINE_UPTIME_MAXDAYS` | Default max uptime | `14` |
 
-Command line options override environment variables when specified.
+```bash
+# Set defaults via environment
+export MACHINE_REBOOT_TIME="03:00"
+export MACHINE_UPTIME_MAXDAYS="7"
+auto-reboot -N
+```
 
 ## Scheduling Logic
 
-1. **No day restrictions**: Schedule for today at specified time, or tomorrow if time has passed
-2. **With day restrictions**: Find the next occurrence of an allowed day at the specified time
-3. **Multiple allowed days**: Choose the earliest upcoming allowed day
+1. **No day restrictions**: Schedules for today at specified time, or tomorrow if time has passed
+2. **With day restrictions**: Finds next allowed day within 7 days
+3. **Force reboot**: Ignores all conditions except time/day restrictions
 
-## Examples
+## Logging
 
-### Cron Integration
-```bash
-# Check daily at 23:15, reboot only on Sundays at 04:05 if uptime > 14 days
-15 23 * * * root /usr/local/bin/auto-reboot --max-uptime-days 14 --reboot-time 04:05 --allowed-days Sun -N
-```
-
-### Weekly Maintenance Windows
-```bash
-# Allow reboots only during weekend maintenance windows
-auto-reboot --allowed-days Sat,Sun --reboot-time 02:00 -N
-```
-
-### Emergency Updates
-```bash
-# Force immediate reboot (scheduled for next occurrence of allowed time)
-auto-reboot --force-reboot --reboot-time 23:00 --allowed-days Mon,Tue,Wed,Thu,Fri -N
-```
-
-## Cron Configuration
-
-For automated checks, add to root's crontab:
+All reboot schedules and deletions are logged to syslog:
 
 ```bash
-# Check daily at 23:15
-15 23 * * * /usr/local/bin/auto-reboot -N
+# View logs
+sudo journalctl -t auto-reboot
+
+# Example log entries:
+# Jul 21 09:28:22 server01 auto-reboot: Scheduling system reboot in 46898s for user admin (uptime: 15d)
+# Jul 21 09:28:34 server01 auto-reboot: Successfully scheduled reboot for 2025-07-21 22:30:12
+# Jul 21 09:46:48 server01 auto-reboot: Deleted scheduled reboot timer: auto-reboot-1753061346.timer by user admin
 ```
 
 ## Safety Features
 
-- **Dry run by default**: Always test with dry run before execution
-- **Clear scheduling output**: Shows exactly when reboot will occur
-- **Systemd integration**: Uses reliable systemd timers instead of fragile background processes
-- **Input validation**: Validates all time formats and day specifications
-- **Error handling**: Clear error messages for invalid inputs
+- **Dry run by default**: Prevents accidental reboots
+- **Automatic sudo**: Elevates privileges when needed
+- **Confirmation prompts**: For delete-all operations
+- **Audit trail**: Syslog entries for all operations
+- **Validation**: Comprehensive input checking
+- **Timer persistence**: Survives system restarts
 
-## Output Examples
+## Troubleshooting
 
 ```bash
-$ auto-reboot --version
-auto-reboot 1.0.422
+# Verify systemd-run is available
+which systemd-run || auto-reboot --install
 
-$ auto-reboot --max-uptime-days 7 --allowed-days Sun --dry-run
-Reboot required for [hostname]
-  Reason: Uptime (8 days) exceeds maximum (7 days)
-  Scheduled for: 2024-12-22 22:00:00 UTC
-auto-reboot: systemd-run: [DRY RUN] Reboot scheduled in 234567 seconds
-auto-reboot: [DRY RUN] Use 'auto-reboot -N' to execute
+# Check systemd status
+systemctl is-system-running
+
+# List all system timers (including auto-reboot)
+systemctl list-timers --all | grep auto-reboot
+
+# Check timer details
+systemctl status auto-reboot-XXXXXX.timer
+
+# View recent logs
+journalctl -t auto-reboot --since "1 hour ago"
 ```
+
+## Security
+
+- Restricted to root and sudo group members
+- File permissions: 770 (owner: root, group: sudo)
+- All operations logged with username
+- No sensitive data in logs
 
 ## License
 
-GPL-3. See [LICENSE](LICENSE).
+GPL-3.0 - See [LICENSE](LICENSE) for details.
 
+## Version
+
+Current version: 1.0.422
