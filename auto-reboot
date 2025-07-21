@@ -1,16 +1,30 @@
 #!/bin/bash
 #shellcheck disable=SC2155
 set -euo pipefail
+declare -- PRG0 PRG VERSION
 PRG0=$(readlink -fn -- "$0")
 PRG=$(basename -- "$PRG0")
+VERSION="1.0.422"
 
 # Configuration
-declare ok_MACHINE_REBOOT_TIME=${ok_MACHINE_REBOOT_TIME:-22:00}
-declare ok_MACHINE_UPTIME_MAXDAYS=${ok_MACHINE_UPTIME_MAXDAYS:-14}
+declare -x MACHINE_REBOOT_TIME=${MACHINE_REBOOT_TIME:-22:00}
+declare -x MACHINE_UPTIME_MAXDAYS=${MACHINE_UPTIME_MAXDAYS:-14}
 
 # State variables
 declare -i reboot_needed=0 dryrun=1 force_reboot=0 uptime_days=0
 declare -a allowed_days=()  # Array to store allowed days (0-6, 0=Sunday)
+
+# helper functions
+msg() {
+  local label="$1"
+  shift
+  local SEP=': ' msg
+  [[ -z $label ]] || label+="$SEP"
+  for msg in "$@"; do echo "$PRG$SEP$label$msg"; done
+}
+error() { >&2 msg error "$@"; }
+info() { >&2 msg '' "$@"; }
+#die() { local -i exitcode=$1; shift; >&2 msg error "$@"; exit "$exitcode"; }
 
 # Parse day specification (Sun, Sunday, 0, etc.) to numeric day (0-6)
 parse_day() {
@@ -23,7 +37,9 @@ parse_day() {
     thu|thursday|4) echo 4 ;;
     fri|friday|5) echo 5 ;;
     sat|saturday|6) echo 6 ;;
-    *) echo "Error: Invalid day '$day'. Use Sun-Sat, Sunday-Saturday, or 0-6." >&2; return 1 ;;
+    *) error "${FUNCNAME[1]}: Invalid day '$day'. Use Sun-Sat, Sunday-Saturday, or 0-6."
+      return 1
+      ;;
   esac
 }
 
@@ -32,7 +48,7 @@ parse_allowed_days() {
   local day_list="$1"
   local day
   allowed_days=()
-  
+
   IFS=',' read -ra days <<< "$day_list"
   for day in "${days[@]}"; do
     day=$(echo "$day" | xargs)  # Trim whitespace
@@ -48,33 +64,34 @@ parse_allowed_days() {
 is_reboot_day_allowed() {
   # If no restrictions set, allow any day
   [[ ${#allowed_days[@]} -eq 0 ]] && return 0
-  
+
   local current_day=$(date +'%w')  # 0-6, 0=Sunday
   local allowed_day
-  
+
   for allowed_day in "${allowed_days[@]}"; do
-    [[ $current_day -eq $allowed_day ]] && return 0  
+    [[ $current_day -eq $allowed_day ]] && return 0
   done
-  
+
   return 1  # Current day not allowed
 }
 
 # Check reboot conditions
 check_reboot_conditions() {
+  declare -g uptime_days reboot_needed
   # Check for reboot-required file
   if [[ -f /var/run/reboot-required ]]; then
     reboot_needed=1
   fi
-  
+
   # Check uptime threshold and calculate uptime days
   local uptime_start=$(date -d "$(uptime -s)" +'%s' -u)
   local current_time=$(date +'%s' -u)
-  uptime_days=$(((current_time - uptime_start) / 86400))
-  
-  if (( uptime_days >= ok_MACHINE_UPTIME_MAXDAYS )); then
+  uptime_days=$(( (current_time - uptime_start) / 86400))
+
+  if (( uptime_days >= MACHINE_UPTIME_MAXDAYS )); then
     reboot_needed=1
   fi
-  
+
   # Force reboot overrides conditions
   if (( force_reboot )); then
     reboot_needed=1
@@ -86,17 +103,17 @@ calculate_reboot_delay() {
   local target_time="$1"
   local current_epoch=$(date +'%s')
   local target_epoch
-  
+
   # Parse time format (HH:MM)
   if [[ $target_time =~ ^([0-9]{1,2}):([0-9]{2})$ ]]; then
     local hour=${BASH_REMATCH[1]}
     local minute=${BASH_REMATCH[2]}
-    
+
     # If no day restrictions, use simple logic
     if [[ ${#allowed_days[@]} -eq 0 ]]; then
       # Calculate target time today
       target_epoch=$(date -d "today ${hour}:${minute}" +'%s')
-      
+
       # If target time has passed today, schedule for tomorrow
       if (( target_epoch <= current_epoch )); then
         target_epoch=$(date -d "tomorrow ${hour}:${minute}" +'%s')
@@ -106,19 +123,19 @@ calculate_reboot_delay() {
       local days_ahead=0
       local current_day=$(date +'%w')
       local found=0
-      
+
       # Check today at target time if it hasn't passed and today is allowed
       target_epoch=$(date -d "today ${hour}:${minute}" +'%s')
       if (( target_epoch > current_epoch )) && is_reboot_day_allowed; then
         found=1
       fi
-      
+
       # If not found, search for next allowed day (up to 7 days ahead)
       if (( ! found )); then
         for (( days_ahead=1; days_ahead<=7; days_ahead++ )); do
           local check_day=$(( (current_day + days_ahead) % 7 ))
           local allowed_day
-          
+
           for allowed_day in "${allowed_days[@]}"; do
             if [[ $check_day -eq $allowed_day ]]; then
               target_epoch=$(date -d "+${days_ahead} days ${hour}:${minute}" +'%s')
@@ -128,16 +145,16 @@ calculate_reboot_delay() {
           done
         done
       fi
-      
+
       if (( ! found )); then
-        echo "Error: No valid reboot day found in next 7 days" >&2
+        error "No valid reboot day found in next 7 days"
         return 1
       fi
     fi
-    
+
     echo $((target_epoch - current_epoch))
   else
-    echo "Error: Invalid time format '$target_time'. Use HH:MM format." >&2
+    error "Invalid time format '$target_time'. Use HH:MM format."
     return 1
   fi
 }
@@ -146,124 +163,297 @@ calculate_reboot_delay() {
 schedule_reboot() {
   local delay=$1
   local reboot_cmd="/sbin/shutdown -r now 'Scheduled reboot by $PRG'"
-  
+
   # Check if systemd is available
-  if ! command -v systemd-run >/dev/null 2>&1; then
-    echo "Error: systemd-run not found. This script requires systemd for reliable scheduling." >&2
-    return 1
-  fi
-  
+  systemd_run_required || return 1
+
+  # Check systemd availability - allow running (0) or degraded (1) states
   if ! systemctl is-system-running >/dev/null 2>&1; then
-    echo "Error: systemd is not running. This script requires systemd for reliable scheduling." >&2  
-    return 1
+    # Only fail if exit code > 1 (not just degraded)
+    if (( $? > 1 )); then
+      error "systemd is not running. This script requires systemd for reliable scheduling."
+      return 1
+    fi
   fi
-  
+
+
   # Schedule reboot using systemd-run
   if (( ! dryrun )); then
+    # Log to syslog when actually scheduling a reboot
+    logger -t "$PRG" "Scheduling system reboot in ${delay}s for user ${SUDO_USER:-$USER} (uptime: ${uptime_days}d)"
+    
     systemd-run --on-active="${delay}s" --timer-property=AccuracySec=1s \
       --unit="auto-reboot-$(date +%s)" \
       --description="Scheduled reboot by $PRG" \
       bash -c "$reboot_cmd"
-    echo "Reboot scheduled using systemd-run in ${delay} seconds"
-  else
-    echo "[DRY RUN] Would schedule reboot using systemd-run in ${delay} seconds"
+    
+    # Log success if systemd-run succeeded
+    if [[ $? -eq 0 ]]; then
+      logger -t "$PRG" "Successfully scheduled reboot for $(date -d "now + ${delay} seconds" +'%F %T')"
+    fi
   fi
+
+  info "systemd-run: $( (( ! dryrun)) || echo "[DRY RUN] ")Reboot scheduled in ${delay} seconds"
+}
+
+# List all scheduled auto-reboot timers
+list_schedules() {
+  local count=0
+  local line
+  
+  echo "Active auto-reboot schedules:"
+  echo "============================="
+  
+  # Get all auto-reboot timers with details
+  local timer_output
+  timer_output=$(systemctl list-timers --all --no-pager 2>/dev/null | grep -E 'auto-reboot-[0-9]+\.timer' || true)
+  
+  if [[ -z "$timer_output" ]]; then
+    echo "No active auto-reboot schedules found."
+    return 0
+  fi
+  
+  while IFS= read -r line; do
+    ((count+=1))
+    # Extract timer name and scheduled time from the line
+    local timer_name=$(echo "$line" | grep -o 'auto-reboot-[0-9]*\.timer')
+    local scheduled_time=$(echo "$line" | awk '{print $1, $2, $3, $4}')
+    echo "$count. $timer_name - Scheduled: $scheduled_time"
+  done <<< "$timer_output"
+  
+  echo "============================="
+  echo "Total: $count scheduled reboot(s)"
+}
+
+# Delete a specific auto-reboot timer
+delete_schedule() {
+  local timer_name="$1"
+  
+  # Check for root privileges
+  if [[ $EUID -ne 0 ]]; then
+    error "Deleting timers requires root privileges. Please run with sudo."
+    return 1
+  fi
+  
+  # Validate timer name format
+  if [[ ! $timer_name =~ ^auto-reboot-[0-9]+\.timer$ ]]; then
+    # If just the ID was provided, construct full name
+    if [[ $timer_name =~ ^[0-9]+$ ]]; then
+      timer_name="auto-reboot-${timer_name}.timer"
+    elif [[ $timer_name =~ ^auto-reboot-[0-9]+$ ]]; then
+      timer_name="${timer_name}.timer"
+    else
+      error "Invalid timer name format. Use: auto-reboot-TIMESTAMP or just TIMESTAMP"
+      return 1
+    fi
+  fi
+  
+  # Check if timer exists using list-timers (more reliable for transient timers)
+  if ! systemctl list-timers --all --no-pager 2>/dev/null | grep -q "$timer_name"; then
+    error "Timer $timer_name not found"
+    return 1
+  fi
+  
+  # Stop and remove both timer and service
+  local service_name="${timer_name%.timer}.service"
+  
+  info "Deleting $timer_name..."
+  systemctl stop "$timer_name" 2>/dev/null || true
+  systemctl stop "$service_name" 2>/dev/null || true
+  
+  # Log the deletion
+  logger -t "$PRG" "Deleted scheduled reboot timer: $timer_name by user ${SUDO_USER:-$USER}"
+  
+  info "Successfully deleted $timer_name"
+}
+
+# Delete all auto-reboot timers
+delete_all_schedules() {
+  # Check for root privileges
+  if [[ $EUID -ne 0 ]]; then
+    error "Deleting timers requires root privileges. Please run with sudo."
+    return 1
+  fi
+  
+  local count=0
+  local timers=()
+  
+  # Collect all auto-reboot timers
+  while IFS= read -r timer; do
+    if [[ -n $timer ]]; then
+      timers+=("$timer")
+      ((count+=1))
+    fi
+  done < <(systemctl list-timers --all --no-pager 2>/dev/null | grep -o 'auto-reboot-[0-9]*\.timer')
+  
+  if (( count == 0 )); then
+    info "No auto-reboot schedules found to delete."
+    return 0
+  fi
+  
+  # Confirm deletion in non-dry-run mode
+  if (( ! dryrun )); then
+    echo "Found $count auto-reboot schedule(s):"
+    printf '%s\n' "${timers[@]}"
+    echo
+    read -p "Delete all schedules? [y/N] " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+      info "Deletion cancelled."
+      return 0
+    fi
+  fi
+  
+  # Delete each timer
+  for timer in "${timers[@]}"; do
+    delete_schedule "$timer"
+  done
+  
+  logger -t "$PRG" "Deleted all scheduled reboot timers ($count total) by user ${SUDO_USER:-$USER}"
+  info "Deleted $count auto-reboot schedule(s)."
+}
+
+install_auto_reboot() {
+  if ! command -v systemd-run >/dev/null 2>&1; then
+    info "Installing systemd-run (package systemd-container)"
+    sudo apt-get update --quiet --assume-yes || {
+      info "apt-get update failed"
+      return 1
+    }
+    sudo apt-get install --quiet --assume-yes systemd-container || {
+      error "Install systemd-run failed"
+      return 1
+    }
+  fi
+  if ! command -v systemd-run >/dev/null 2>&1; then
+    error "Could not find systemd-run"
+    return 1
+  fi
+  info "systemd-container is installed"
+
+  local localbin=/usr/local/bin/"$PRG"
+  [[ "$PRG0" == "$localbin" ]] && return 0
+
+  [[ -L $localbin ]] && rm "$localbin"
+  [[ -f $localbin ]] && rm "$localbin"
+  sudo ln -fs "$PRG0" "$localbin"
+
+  info "$PRG Installed"
+  return 0
 }
 
 main() {
-  # Show usage if help is requested, otherwise proceed with default dry-run
-  if [[ $# -eq 1 && ($1 == "-h" || $1 == "--help") ]]; then
-    usage; return 0
-  fi
-  
   # Parse command line arguments
-  while (($#)); do 
-    case $1 in 
-      -h|--help)    
-        usage; return 0 ;;
-      -d|--dry-run|--dryrun)
+  while (($#)); do
+    case $1 in
+      -h|--help)
+        usage
+        return 0
+        ;;
+      -n|--dry-run|--dryrun)
         dryrun=1 ;;
       -N|--not-dry-run|--notdryrun)
         dryrun=0 ;;
       -f|--force-reboot)
         force_reboot=1 ;;
-      --max-uptime-days)
-        [[ $# -lt 2 ]] && { echo "Error: --max-uptime-days requires an argument" >&2; return 1; }
+      -m|--max-uptime-days)
+        [[ $# -lt 2 ]] && { error "--max-uptime-days requires an argument"; return 1; }
         if [[ $2 =~ ^[0-9]+$ ]] && [[ $2 -gt 0 ]]; then
-          ok_MACHINE_UPTIME_MAXDAYS=$2
+          MACHINE_UPTIME_MAXDAYS=$2
           shift
         else
-          echo "Error: --max-uptime-days must be a positive integer" >&2; return 1
+          error "--max-uptime-days must be a positive integer"; return 1
         fi ;;
-      --reboot-time)
-        [[ $# -lt 2 ]] && { echo "Error: --reboot-time requires an argument" >&2; return 1; }
+      -r|--reboot-time)
+        [[ $# -lt 2 ]] && { error "--reboot-time requires an argument"; return 1; }
         if [[ $2 =~ ^([0-9]{1,2}):([0-9]{2})$ ]]; then
           local hour=${BASH_REMATCH[1]}
           local minute=${BASH_REMATCH[2]}
           if (( hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 )); then
-            ok_MACHINE_REBOOT_TIME=$2
+            MACHINE_REBOOT_TIME=$2
             shift
           else
-            echo "Error: --reboot-time must be valid time (00:00-23:59)" >&2; return 1
+            error "--reboot-time must be valid time (00:00-23:59)"; return 1
           fi
         else
-          echo "Error: --reboot-time must be in HH:MM format" >&2; return 1
+          error "--reboot-time must be in HH:MM format"; return 1
         fi ;;
-      --allowed-days)
-        [[ $# -lt 2 ]] && { echo "Error: --allowed-days requires an argument" >&2; return 1; }
+      -a|--allowed-days)
+        [[ $# -lt 2 ]] && { error "--allowed-days requires an argument"; return 1; }
         if ! parse_allowed_days "$2"; then
           return 1
         fi
         shift ;;
-      -[hdNf]*) 
+      -i|--install)
+        install_auto_reboot
+        exit $?
+        ;;
+      -l|--list)
+        list_schedules
+        exit 0
+        ;;
+      -d|--delete)
+        [[ $# -lt 2 ]] && { error "--delete requires a timer name"; return 1; }
+        delete_schedule "$2"
+        exit $?
+        ;;
+      -D|--delete-all)
+        delete_all_schedules
+        exit $?
+        ;;
+      -V|--version)
+        echo "$PRG $VERSION"
+        exit 0
+        ;;
+      -[hdNfmrailDV]*)
         #shellcheck disable=SC2046
         set -- '' $(printf -- "-%c " $(grep -o . <<<"${1:1}")) "${@:2}";;
       *)
-        echo "Error: Unknown option '$1'" >&2
+        error "Unknown option '$1'"
         usage; return 1 ;;
     esac
     shift
   done
   
+  systemd_run_required || return 1
+
   # Check conditions now that all arguments are parsed
   check_reboot_conditions
-  
+
   if ((reboot_needed)); then
-    echo "Reboot required for [$HOSTNAME]"
-    
+    echo "Host: $HOSTNAME"
+    echo "Status: Reboot required"
     if [[ -f /var/run/reboot-required ]]; then
-      echo "  Reason: System updates require reboot"
+      echo "  - Reason: System updates require reboot"
     fi
-    
-    if (( uptime_days >= ok_MACHINE_UPTIME_MAXDAYS )); then
-      echo "  Reason: Uptime (${uptime_days} days) exceeds maximum (${ok_MACHINE_UPTIME_MAXDAYS} days)"
+
+    if (( uptime_days >= MACHINE_UPTIME_MAXDAYS )); then
+      echo "  - Reason: Uptime (${uptime_days} days) exceeds maximum (${MACHINE_UPTIME_MAXDAYS} days)"
     fi
-    
-    (( force_reboot )) && echo "  Reason: Force reboot requested"
-    
+
+    (( force_reboot )) && echo "  - Reason: Force reboot requested"
+
     # Calculate delay and schedule reboot
     delay=""
-    if delay=$(calculate_reboot_delay "$ok_MACHINE_REBOOT_TIME"); then
+    if delay=$(calculate_reboot_delay "$MACHINE_REBOOT_TIME"); then
       target_time=$(date -d "now + ${delay} seconds" +'%F %T %Z')
-      echo "  Scheduled for: $target_time"
-      
+      echo "Delay: $delay"
+      echo "Scheduled: $target_time"
+
       schedule_reboot "$delay"
-      
+
       if (( dryrun )); then
-        echo "[DRY RUN] Use '$PRG -N' to execute"
+        info "[DRY RUN] Use '$PRG' with option '-N' to execute"
       fi
     else
-      echo "Error: Failed to calculate reboot delay" >&2
+      error "Failed to calculate reboot delay"
       return 1
     fi
   else
-    echo "Reboot not required for [$HOSTNAME]"
-    echo "  Uptime: $(uptime -p)"
-    if [[ -f /var/run/reboot-required ]]; then
-      echo "  Reboot required file: present"
-    else
-      echo "  Reboot required file: absent"
-    fi
+    echo "Host: $HOSTNAME"
+    echo "Uptime: $(uptime -p)"
+    echo "Reboot-required: $( [[ -f /var/run/reboot-required ]] && echo present || echo absent)"
+    echo "Status: Reboot not required"
   fi
 }
 
@@ -280,25 +470,42 @@ DESCRIPTION:
 USAGE:
     auto-reboot [OPTIONS] [-f] [-d|-N]
 
+DEPENDENCIES:
+    systemd-run (from systemd-container)
+
 OPTIONS:
-    -f, --force-reboot          Unconditional reboot. Ignore reboot-required and uptime.
-    -d, --dry-run               Dry run only. Do not execute (default is dry run).
-    -N, --not-dry-run           Execute (not a dry run).
-    -h, --help                  Show this help message.
-    
-    --max-uptime-days DAYS      Maximum uptime in days before forced reboot (default: 14)
-    --reboot-time HH:MM         Time to schedule reboot in HH:MM format (default: 22:00)
-    --allowed-days DAYS         Restrict reboots to specific days of week
-                                DAYS can be: Sun,Mon,Tue,Wed,Thu,Fri,Sat
-                                Or: Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday  
-                                Or: 0,1,2,3,4,5,6 (0=Sunday)
-                                Multiple days: --allowed-days Sun,Mon,Fri
+    -f, --force-reboot  Unconditional reboot. Ignore reboot-required and uptime.
+    -n, --dry-run       Dry run only. Do not execute (default is dry run).
+    -N, --not-dry-run   Execute (not a dry run).
+    -h, --help          Show this help message.
+    -i, --install       Install auto-reboot to /usr/local/bin and dependencies.
+    -V, --version       Show version information ($VERSION).
+
+    -m, --max-uptime-days DAYS
+                        Maximum uptime in days before forced reboot (default: 14)
+    -r, --reboot-time HH:MM
+                        Time to schedule reboot in HH:MM format (default: 22:00)
+    -a, --allowed-days DAYS
+                        Restrict reboots to specific days of week
+                        DAYS can be: Sun,Mon,Tue,Wed,Thu,Fri,Sat
+                        Or: Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday
+                        Or: 0,1,2,3,4,5,6 (0=Sunday)
+                        Multiple days: --allowed-days Sun,Mon,Fri
+
+SCHEDULE MANAGEMENT:
+    -l, --list          List all scheduled auto-reboot timers
+    -d, --delete TIMER  Delete a specific auto-reboot timer
+                        TIMER can be: full name (auto-reboot-1234.timer),
+                        partial name (auto-reboot-1234), or just ID (1234)
+    -D, --delete-all    Delete all scheduled auto-reboot timers
+                        (asks for confirmation)
 
 ENVIRONMENT VARIABLES:
-    ok_MACHINE_REBOOT_TIME      Time to schedule reboot (default: 22:00)
-                                Overridden by --reboot-time option
-    ok_MACHINE_UPTIME_MAXDAYS   Maximum uptime in days (default: 14)
-                                Overridden by --max-uptime-days option
+    MACHINE_REBOOT_TIME Time to schedule reboot (default: 22:00)
+                        Overridden by --reboot-time option
+    MACHINE_UPTIME_MAXDAYS
+                        Maximum uptime in days (default: 14)
+                        Overridden by --max-uptime-days option
 
 EXAMPLES:
     auto-reboot --dry-run
@@ -306,6 +513,24 @@ EXAMPLES:
     auto-reboot --allowed-days Mon,Wed,Fri --reboot-time 22:30 -N
 
 EOF
+  systemd_run_required || return 1
+  return 0
+}
+
+systemd_run_required() {
+  if ! command -v systemd-run >/dev/null 2>&1; then
+    error "Requires systemd-run from package systemd-container"
+    if id -nG "${USER:-}" | grep -qw sudo || ((EUID==0)); then
+      >&2 echo
+      info "Run:"
+      echo "sudo $PRG --install"
+      >&2 echo
+      info "Or:"
+      echo "sudo apt update && sudo apt install systemd-container"
+    fi
+    return 1
+  fi
+  return 0
 }
 
 main "$@"

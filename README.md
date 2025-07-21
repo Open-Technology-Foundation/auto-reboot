@@ -2,6 +2,8 @@
 
 A bash script for intelligent system reboots with flexible scheduling and day-of-week restrictions.
 
+**Version:** 1.0.422
+
 ## Overview
 
 `auto-reboot` automatically reboots systems when:
@@ -19,13 +21,27 @@ The script uses systemd-run for reliable scheduling and supports flexible time a
 - **Multiple Trigger Conditions**: Reboot on system updates, uptime threshold, or force
 - **Dry Run Mode**: Safe testing mode enabled by default
 - **Comprehensive Validation**: Input validation for all parameters
+- **Self-Installation**: Built-in installation capability with dependency management
+- **Version Information**: Track script version with `-V` option
 
 ## Requirements
 
 - Linux system with systemd (required for scheduling)
 - Bash 4.0+
 - Root privileges for actual reboots
-- `systemd-run` command available and systemd running
+- `systemd-run` command (provided by systemd-container package)
+- systemd must be running
+
+## Installation
+
+```bash
+# Quick install with automatic dependency resolution
+sudo auto-reboot --install
+
+# Or manual installation
+sudo cp auto-reboot /usr/local/bin/
+sudo chmod +x /usr/local/bin/auto-reboot
+```
 
 ## Usage
 
@@ -46,19 +62,24 @@ auto-reboot --max-uptime-days 7 --reboot-time 04:00 --allowed-days Sat,Sun -N
 auto-reboot --allowed-days Mon,Wed,Fri -N       # Short names
 auto-reboot --allowed-days 0,6 -N               # Numeric (0=Sunday)
 auto-reboot --allowed-days Sunday,Saturday -N   # Full names
+
+# Check version
+auto-reboot --version
 ```
 
 ## Command Line Options
 
-| Option | Description |
-|--------|-------------|
-| `-h, --help` | Show help message |
-| `-d, --dry-run` | Dry run only (default) |
-| `-N, --not-dry-run` | Execute the reboot |
-| `-f, --force-reboot` | Unconditional reboot |
-| `--max-uptime-days DAYS` | Maximum uptime before forced reboot (default: 14) |
-| `--reboot-time HH:MM` | Time to schedule reboot (default: 22:00) |
-| `--allowed-days DAYS` | Restrict reboots to specific weekdays |
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--help` | `-h` | Show help message |
+| `--dry-run` | `-n` | Dry run only (default) |
+| `--not-dry-run` | `-N` | Execute the reboot |
+| `--force-reboot` | `-f` | Unconditional reboot |
+| `--max-uptime-days DAYS` | `-m` | Maximum uptime before forced reboot (default: 14) |
+| `--reboot-time HH:MM` | `-r` | Time to schedule reboot (default: 22:00) |
+| `--allowed-days DAYS` | `-a` | Restrict reboots to specific weekdays |
+| `--install` | `-i` | Install script and dependencies |
+| `--version` | `-V` | Show version information |
 
 ### Day Formats
 
@@ -73,8 +94,8 @@ The `--allowed-days` option accepts multiple formats:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ok_MACHINE_REBOOT_TIME` | Default reboot time in HH:MM format | `22:00` |
-| `ok_MACHINE_UPTIME_MAXDAYS` | Default maximum uptime in days | `14` |
+| `MACHINE_REBOOT_TIME` | Default reboot time in HH:MM format | `22:00` |
+| `MACHINE_UPTIME_MAXDAYS` | Default maximum uptime in days | `14` |
 
 Command line options override environment variables when specified.
 
@@ -104,11 +125,14 @@ auto-reboot --allowed-days Sat,Sun --reboot-time 02:00 -N
 auto-reboot --force-reboot --reboot-time 23:00 --allowed-days Mon,Tue,Wed,Thu,Fri -N
 ```
 
-## Installation
+## Cron Configuration
 
-1. Copy `auto-reboot` to `/usr/local/bin/` or another directory in your PATH
-2. Make it executable: `chmod +x /usr/local/bin/auto-reboot`
-3. Configure cron or systemd timer for automated checks
+For automated checks, add to root's crontab:
+
+```bash
+# Check daily at 23:15
+15 23 * * * /usr/local/bin/auto-reboot -N
+```
 
 ## Safety Features
 
@@ -121,14 +145,18 @@ auto-reboot --force-reboot --reboot-time 23:00 --allowed-days Mon,Tue,Wed,Thu,Fr
 ## Output Examples
 
 ```bash
+$ auto-reboot --version
+auto-reboot 1.0.422
+
 $ auto-reboot --max-uptime-days 7 --allowed-days Sun --dry-run
 Reboot required for [hostname]
   Reason: Uptime (8 days) exceeds maximum (7 days)
   Scheduled for: 2024-12-22 22:00:00 UTC
-[DRY RUN] Would schedule reboot using systemd-run in 234567 seconds
-[DRY RUN] Use 'auto-reboot -N' to execute
+auto-reboot: systemd-run: [DRY RUN] Reboot scheduled in 234567 seconds
+auto-reboot: [DRY RUN] Use 'auto-reboot -N' to execute
 ```
 
 ## License
 
-See project license
+GPL-3. See [LICENSE](LICENSE).
+
