@@ -1,0 +1,1 @@
+/ai/scripts/okusi/bash-coding-standard/BASH-CODING-STANDARD.md

@@ -1,0 +1,59 @@
+# Bash completion for auto-reboot
+_auto_reboot() {
+    local cur prev opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    # All available options
+    opts="-h --help -n --dry-run --dryrun -N --not-dry-run --notdryrun -f --force-reboot -m --max-uptime-days -r --reboot-time -a --allowed-days -i --install -l --list -d --delete -D --delete-all -V --version"
+
+    case $prev in
+        -m|--max-uptime-days)
+            # Complete with common day values
+            COMPREPLY=( $(compgen -W "1 3 7 14 30 60 90" -- "$cur") )
+            return 0
+            ;;
+        -r|--reboot-time)
+            # Complete with common time values
+            COMPREPLY=( $(compgen -W "00:00 01:00 02:00 03:00 04:00 22:00 23:00" -- "$cur") )
+            return 0
+            ;;
+        -a|--allowed-days)
+            # Complete with day options
+            local days="Sun Mon Tue Wed Thu Fri Sat Sunday Monday Tuesday Wednesday Thursday Friday Saturday 0 1 2 3 4 5 6"
+            # Handle comma-separated values
+            if [[ $cur == *,* ]]; then
+                local prefix="${cur%,*},"
+                local suffix="${cur##*,}"
+                COMPREPLY=( $(compgen -P "$prefix" -W "$days" -- "$suffix") )
+            else
+                COMPREPLY=( $(compgen -W "$days" -- "$cur") )
+            fi
+            return 0
+            ;;
+        -d|--delete)
+            # Complete with existing timer names
+            local timers
+            if command -v systemctl >/dev/null 2>&1; then
+                timers=$(systemctl list-timers --all --no-pager 2>/dev/null | grep -o 'auto-reboot-[0-9]*\.timer' | sed 's/\.timer$//')
+                if [[ -n $timers ]]; then
+                    # Add both full names and just the numeric IDs
+                    local timer_ids=$(echo "$timers" | sed 's/auto-reboot-//')
+                    COMPREPLY=( $(compgen -W "$timers $timer_ids" -- "$cur") )
+                fi
+            fi
+            return 0
+            ;;
+    esac
+
+    # Complete with available options
+    if [[ $cur == -* ]]; then
+        COMPREPLY=( $(compgen -W "$opts" -- "$cur") )
+        return 0
+    fi
+
+    return 0
+}
+
+complete -F _auto_reboot auto-reboot

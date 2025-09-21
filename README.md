@@ -2,6 +2,9 @@
 
 Intelligent system reboot scheduler with flexible timing and day-of-week restrictions.
 
+**Version:** 1.1.0
+**Standards:** BASH-CODING-STANDARD.md compliant
+
 ## Overview
 
 `auto-reboot` schedules system reboots based on:
@@ -45,7 +48,7 @@ sudo chown root:sudo /usr/local/bin/auto-reboot
 ## Requirements
 
 - Linux with systemd
-- Bash 4.0+
+- Bash 4.0+ (5.0+ recommended for full feature support)
 - systemd-run (systemd-container package)
 - Membership in sudo group or root access
 
@@ -260,6 +263,19 @@ journalctl -t auto-reboot --since "1 hour ago"
 
 GPL-3.0 - See [LICENSE](LICENSE) for details.
 
-## Version
+## Changelog
 
-Current version: 1.0.422
+### Version 1.1.0 (2025-09-21)
+- **Standards Compliance**: Full BASH-CODING-STANDARD.md compliance
+- **Enhanced Error Handling**: Added `inherit_errexit` for robust subshell error propagation
+- **Improved Messaging**: Standardized message functions with automatic color detection
+- **Code Quality**: Zero shellcheck warnings, proper type declarations for all variables
+- **Safety Improvements**: Key variables made readonly to prevent accidental modification
+- **Better Shell Options**: Added `shift_verbose`, `extglob`, and `nullglob` for safer operation
+
+### Version 1.0.422
+- Initial stable release with core scheduling functionality
+- Day-of-week restrictions and flexible timing
+- Schedule management (list, delete, delete-all)
+- Automatic sudo elevation
+- Comprehensive syslog audit trail
