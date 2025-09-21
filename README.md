@@ -2,7 +2,7 @@
 
 Intelligent system reboot scheduler with flexible timing and day-of-week restrictions.
 
-**Version:** 1.1.0
+**Version:** 1.1.1
 **Standards:** BASH-CODING-STANDARD.md compliant
 
 ## Overview
@@ -264,6 +264,13 @@ journalctl -t auto-reboot --since "1 hour ago"
 GPL-3.0 - See [LICENSE](LICENSE) for details.
 
 ## Changelog
+
+### Version 1.1.1 (2025-09-21)
+- **Full Compliance**: Complete BASH-CODING-STANDARD.md adherence
+- **Script Structure**: Moved sudo elevation to main() function for proper layout
+- **Code Cleanup**: Removed unused messaging functions and color variables
+- **Performance**: Replaced external xargs with builtin string trimming
+- **Correctness**: Added proper `declare -g` for global variable modifications
 
 ### Version 1.1.0 (2025-09-21)
 - **Standards Compliance**: Full BASH-CODING-STANDARD.md compliance

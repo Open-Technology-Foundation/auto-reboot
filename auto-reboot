@@ -3,20 +3,12 @@
 # Intelligent system reboot scheduler with flexible timing and day-of-week restrictions
 set -euo pipefail
 shopt -s inherit_errexit shift_verbose extglob nullglob
-if ((EUID)); then
-  if id -nG "${USER:-}" | grep -qw sudo || ((EUID==0)); then
-    sudo "$0" "$@"
-    exit
-  fi
-  >&2 echo "Requires root/sudo access"
-  exit 1
-fi
 
 # Script metadata
 declare -- SCRIPT_PATH SCRIPT_NAME VERSION
 SCRIPT_PATH=$(readlink -fn -- "$0")
 SCRIPT_NAME=${SCRIPT_PATH##*/}
-VERSION="1.1.0"
+VERSION="1.1.1"
 readonly -- SCRIPT_PATH SCRIPT_NAME VERSION
 
 # Configuration
@@ -32,18 +24,16 @@ readonly -- XUSER
 
 # Color support detection
 if [[ -t 1 && -t 2 ]]; then
-  declare -- RED=$'\033[0;31m' GREEN=$'\033[0;32m' YELLOW=$'\033[0;33m' CYAN=$'\033[0;36m' NC=$'\033[0m'
+  declare -- RED=$'\033[0;31m' CYAN=$'\033[0;36m' NC=$'\033[0m'
 else
-  declare -- RED='' GREEN='' YELLOW='' CYAN='' NC=''
+  declare -- RED='' CYAN='' NC=''
 fi
-readonly -- RED GREEN YELLOW CYAN NC
+readonly -- RED CYAN NC
 
 # Messaging functions
 _msg() {
   local -- prefix="$SCRIPT_NAME:" msg
   case "${FUNCNAME[1]}" in
-    success) prefix+=" ${GREEN}✓${NC}" ;;
-    warn)    prefix+=" ${YELLOW}⚡${NC}" ;;
     info)    prefix+=" ${CYAN}◉${NC}" ;;
     error)   prefix+=" ${RED}✗${NC}" ;;
     *)       ;;
@@ -75,11 +65,13 @@ parse_day() {
 parse_allowed_days() {
   local -- day_list="$1"
   local -- day
-  allowed_days=()
+  declare -g allowed_days=()
 
   IFS=',' read -ra days <<< "$day_list"
   for day in "${days[@]}"; do
-    day=$(echo "$day" | xargs)  # Trim whitespace
+    # Trim leading and trailing whitespace using parameter expansion
+    day="${day#"${day%%[![:space:]]*}"}"
+    day="${day%"${day##*[![:space:]]}"}"
     if parsed_day=$(parse_day "$day"); then
       allowed_days+=("$parsed_day")
     else
@@ -211,7 +203,7 @@ schedule_reboot() {
     logger -t "$SCRIPT_NAME" "Scheduling system reboot in ${delay}s for user $XUSER (uptime: ${uptime_days}d)"
     
     if systemd-run --on-active="${delay}s" --timer-property=AccuracySec=1s \
-      --unit="auto-reboot-$(date +%s)" \
+      --unit="${SCRIPT_NAME}-$(date +%s)" \
       --description="Scheduled reboot by $SCRIPT_NAME" \
       bash -c "$reboot_cmd"; then
       # Log success if systemd-run succeeded
@@ -226,23 +218,23 @@ schedule_reboot() {
 list_schedules() {
   local -i count=0
   local -- line
-  
-  echo "Active auto-reboot schedules:"
+
+  echo "Active $SCRIPT_NAME schedules:"
   echo "============================="
-  
-  # Get all auto-reboot timers with details
+
+  # Get all $SCRIPT_NAME timers with details
   local -- timer_output
-  timer_output=$(systemctl list-timers --all --no-pager 2>/dev/null | grep -E 'auto-reboot-[0-9]+\.timer' || true)
+  timer_output=$(systemctl list-timers --all --no-pager 2>/dev/null | grep -E "${SCRIPT_NAME}-[0-9]+\.timer" || true)
   
   if [[ -z "$timer_output" ]]; then
-    echo "No active auto-reboot schedules found."
+    echo "No active $SCRIPT_NAME schedules found."
     return 0
   fi
   
   while IFS= read -r line; do
     ((count+=1))
     # Extract timer name and scheduled time from the line
-    local -- timer_name=$(echo "$line" | grep -o 'auto-reboot-[0-9]*\.timer')
+    local -- timer_name=$(echo "$line" | grep -o "${SCRIPT_NAME}-[0-9]*\.timer")
     local -- scheduled_time=$(echo "$line" | awk '{print $1, $2, $3, $4}')
     echo "$count. $timer_name - Scheduled: $scheduled_time"
   done <<< "$timer_output"
@@ -251,19 +243,19 @@ list_schedules() {
   echo "Total: $count scheduled reboot(s)"
 }
 
-# Delete a specific auto-reboot timer
+# Delete a specific $SCRIPT_NAME timer
 delete_schedule() {
   local -- timer_name="$1"
   
   # Validate timer name format
-  if [[ ! $timer_name =~ ^auto-reboot-[0-9]+\.timer$ ]]; then
+  if [[ ! $timer_name =~ ^${SCRIPT_NAME}-[0-9]+\.timer$ ]]; then
     # If just the ID was provided, construct full name
     if [[ $timer_name =~ ^[0-9]+$ ]]; then
-      timer_name="auto-reboot-${timer_name}.timer"
-    elif [[ $timer_name =~ ^auto-reboot-[0-9]+$ ]]; then
+      timer_name="${SCRIPT_NAME}-${timer_name}.timer"
+    elif [[ $timer_name =~ ^${SCRIPT_NAME}-[0-9]+$ ]]; then
       timer_name="${timer_name}.timer"
     else
-      error "Invalid timer name format. Use: auto-reboot-TIMESTAMP or just TIMESTAMP"
+      error "Invalid timer name format. Use: ${SCRIPT_NAME}-TIMESTAMP or just TIMESTAMP"
       return 1
     fi
   fi
@@ -287,27 +279,27 @@ delete_schedule() {
   info "Successfully deleted $timer_name"
 }
 
-# Delete all auto-reboot timers
+# Delete all $SCRIPT_NAME timers
 delete_all_schedules() {
   local -i count=0
   local -a timers=()
-  
-  # Collect all auto-reboot timers
+
+  # Collect all $SCRIPT_NAME timers
   while IFS= read -r timer; do
     if [[ -n $timer ]]; then
       timers+=("$timer")
       ((count+=1))
     fi
-  done < <(systemctl list-timers --all --no-pager 2>/dev/null | grep -o 'auto-reboot-[0-9]*\.timer')
+  done < <(systemctl list-timers --all --no-pager 2>/dev/null | grep -o "${SCRIPT_NAME}-[0-9]*\.timer")
   
   if (( count == 0 )); then
-    info "No auto-reboot schedules found to delete."
+    info "No $SCRIPT_NAME schedules found to delete."
     return 0
   fi
   
   # Confirm deletion in non-dry-run mode
   if (( ! dryrun )); then
-    echo "Found $count auto-reboot schedule(s):"
+    echo "Found $count $SCRIPT_NAME schedule(s):"
     printf '%s\n' "${timers[@]}"
     echo
     read -p "Delete all schedules? [y/N] " -n 1 -r
@@ -324,7 +316,7 @@ delete_all_schedules() {
   done
   
   logger -t "$SCRIPT_NAME" "Deleted all scheduled reboot timers ($count total) by user $XUSER"
-  info "Deleted $count auto-reboot schedule(s)."
+  info "Deleted $count $SCRIPT_NAME schedule(s)."
 }
 
 install_auto_reboot() {
@@ -349,7 +341,7 @@ install_auto_reboot() {
   if [[ "$SCRIPT_PATH" != "$localbin" ]]; then
     [[ -L $localbin ]] && rm "$localbin"
     [[ -f $localbin ]] && rm "$localbin"
-    ln -fs "$PRG0" "$localbin"
+    ln -fs "$SCRIPT_PATH" "$localbin"
   fi
   chown "$XUSER":sudo "$SCRIPT_PATH"
   chmod 770 "$SCRIPT_PATH"
@@ -361,6 +353,16 @@ install_auto_reboot() {
 }
 
 main() {
+  # Check for root/sudo access first
+  if ((EUID)); then
+    if id -nG "${USER:-}" | grep -qw sudo || ((EUID==0)); then
+      sudo "$0" "$@"
+      exit
+    fi
+    >&2 echo "Requires root/sudo access"
+    exit 1
+  fi
+
   # Parse command line arguments
   while (($#)); do
     case $1 in
@@ -477,8 +479,8 @@ main() {
 }
 
 usage() {
-  cat << 'EOF'
-auto-reboot v1.1.0 - Intelligent system reboot scheduler
+  cat << EOF
+$SCRIPT_NAME v1.1.1 - Intelligent system reboot scheduler
 
 DESCRIPTION:
     Schedule system reboots based on conditions:
@@ -490,7 +492,7 @@ DESCRIPTION:
     and comprehensive audit logging.
 
 USAGE:
-    auto-reboot [OPTIONS]
+    $SCRIPT_NAME [OPTIONS]
 
 DEPENDENCIES:
     systemd-run (from systemd-container package)
@@ -503,7 +505,7 @@ OPTIONS:
     -N, --not-dry-run
                   Execute (not a dry run)
     -h, --help    Show this help message
-    -i, --install Install auto-reboot to /usr/local/bin and dependencies
+    -i, --install Install $SCRIPT_NAME to /usr/local/bin and dependencies
     -V, --version Show version information
 
     -m, --max-uptime-days DAYS
@@ -518,13 +520,13 @@ OPTIONS:
                   Multiple days: --allowed-days Sun,Mon,Fri
 
 SCHEDULE MANAGEMENT:
-    -l, --list    List all scheduled auto-reboot timers
+    -l, --list    List all scheduled $SCRIPT_NAME timers
     -d, --delete TIMER
-                  Delete a specific auto-reboot timer
-                  TIMER can be: full name (auto-reboot-1234.timer),
-                  partial name (auto-reboot-1234), or just ID (1234)
+                  Delete a specific $SCRIPT_NAME timer
+                  TIMER can be: full name (${SCRIPT_NAME}-1234.timer),
+                  partial name (${SCRIPT_NAME}-1234), or just ID (1234)
     -D, --delete-all
-                  Delete all scheduled auto-reboot timers
+                  Delete all scheduled $SCRIPT_NAME timers
                   (asks for confirmation)
 
 ENVIRONMENT VARIABLES:
@@ -536,13 +538,13 @@ ENVIRONMENT VARIABLES:
                   Overridden by --max-uptime-days option
 
 EXAMPLES:
-    auto-reboot --dry-run
-    auto-reboot --max-uptime-days 14 --reboot-time 04:20 --allowed-days Sun -N
-    auto-reboot --allowed-days Mon,Wed,Fri --reboot-time 22:30 -N
+    $SCRIPT_NAME --dry-run
+    $SCRIPT_NAME --max-uptime-days 14 --reboot-time 04:20 --allowed-days Sun -N
+    $SCRIPT_NAME --allowed-days Mon,Wed,Fri --reboot-time 22:30 -N
 
 CRON EXAMPLE:
     # Add to root's crontab for weekly Sunday 4:20 AM reboot if uptime > 14 days
-    15 23 * * * auto-reboot --max-uptime-days 14 --reboot-time 04:20 --allowed-days Sun -N
+    15 23 * * * $SCRIPT_NAME --max-uptime-days 14 --reboot-time 04:20 --allowed-days Sun -N
 
 EOF
   systemd_run_required || return 1
