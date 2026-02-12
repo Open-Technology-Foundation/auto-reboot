@@ -1,39 +1,39 @@
 #!/bin/bash
-#shellcheck disable=SC2155
 # Intelligent system reboot scheduler with flexible timing and day-of-week restrictions
 set -euo pipefail
-shopt -s inherit_errexit shift_verbose extglob nullglob
+shopt -s inherit_errexit
 
 # Script metadata
-declare -- SCRIPT_PATH SCRIPT_NAME VERSION
-SCRIPT_PATH=$(readlink -fn -- "$0")
-SCRIPT_NAME=${SCRIPT_PATH##*/}
-VERSION="1.1.1"
-readonly -- SCRIPT_PATH SCRIPT_NAME VERSION
+declare -r VERSION=1.1.1
+#shellcheck disable=SC2155 # realpath return checked by set -e
+declare -r SCRIPT_PATH=$(realpath -- "$0")
+declare -r SCRIPT_NAME=${SCRIPT_PATH##*/}
+declare -r SCRIPT_DIR=${SCRIPT_PATH%/*}
+
+readonly -- PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+export PATH
 
 # Configuration
-declare -x MACHINE_REBOOT_TIME=${MACHINE_REBOOT_TIME:-22:00}
-declare -x MACHINE_UPTIME_MAXDAYS=${MACHINE_UPTIME_MAXDAYS:-14}
+declare -- MACHINE_REBOOT_TIME=${MACHINE_REBOOT_TIME:-22:00}
+declare -- MACHINE_UPTIME_MAXDAYS=${MACHINE_UPTIME_MAXDAYS:-14}
 
 # State variables
-declare -i reboot_needed=0 dryrun=1 force_reboot=0 uptime_days=0
-declare -a allowed_days=()  # Array to store allowed days (0-6, 0=Sunday)
+declare -i REBOOT_NEEDED=0 DRYRUN=1 FORCE_REBOOT=0 UPTIME_DAYS=0
+declare -a ALLOWED_DAYS=()  # Array to store allowed days (0-6, 0=Sunday)
 
-declare -- XUSER=${SUDO_USER:-${USER:-root}}
-readonly -- XUSER
+declare -r XUSER=${SUDO_USER:-${USER:-root}}
 
 # Color support detection
 if [[ -t 1 && -t 2 ]]; then
-  declare -- RED=$'\033[0;31m' CYAN=$'\033[0;36m' NC=$'\033[0m'
+  declare -r RED=$'\033[0;31m' CYAN=$'\033[0;36m' NC=$'\033[0m'
 else
-  declare -- RED='' CYAN='' NC=''
+  declare -r RED='' CYAN='' NC=''
 fi
-readonly -- RED CYAN NC
 
 # Messaging functions
 _msg() {
   local -- prefix="$SCRIPT_NAME:" msg
-  case "${FUNCNAME[1]}" in
+  case ${FUNCNAME[1]} in
     info)    prefix+=" ${CYAN}◉${NC}" ;;
     error)   prefix+=" ${RED}✗${NC}" ;;
     *)       ;;
@@ -42,12 +42,12 @@ _msg() {
 }
 error() { >&2 _msg "$@"; }
 info() { >&2 _msg "$@"; }
-die() { (($# > 1)) && error "${@:2}"; exit "${1:-0}"; }
+die() { (($# < 2)) || error "${@:2}"; exit "${1:-0}"; }
 
 # Parse day specification (Sun, Sunday, 0, etc.) to numeric day (0-6)
 parse_day() {
-  local -- day="$1"
-  case "${day,,}" in  # Convert to lowercase
+  local -- day=$1
+  case ${day,,} in
     sun|sunday|0) echo 0 ;;
     mon|monday|1) echo 1 ;;
     tue|tuesday|2) echo 2 ;;
@@ -55,41 +55,43 @@ parse_day() {
     thu|thursday|4) echo 4 ;;
     fri|friday|5) echo 5 ;;
     sat|saturday|6) echo 6 ;;
-    *) error "${FUNCNAME[1]}: Invalid day '$day'. Use Sun-Sat, Sunday-Saturday, or 0-6."
+    *) error "${FUNCNAME[1]}: Invalid day ${day@Q}. Use Sun-Sat, Sunday-Saturday, or 0-6."
       return 1
       ;;
   esac
 }
 
-# Parse comma-separated day list and populate allowed_days array
+# Parse comma-separated day list and populate ALLOWED_DAYS array
 parse_allowed_days() {
-  local -- day_list="$1"
+  local -- day_list=$1
   local -- day
-  declare -g allowed_days=()
+  local -a days=()
+  local -- parsed_day
+  declare -g ALLOWED_DAYS=()
 
   IFS=',' read -ra days <<< "$day_list"
   for day in "${days[@]}"; do
     # Trim leading and trailing whitespace using parameter expansion
-    day="${day#"${day%%[![:space:]]*}"}"
-    day="${day%"${day##*[![:space:]]}"}"
+    day=${day#"${day%%[![:space:]]*}"}
+    day=${day%"${day##*[![:space:]]}"}
     if parsed_day=$(parse_day "$day"); then
-      allowed_days+=("$parsed_day")
+      ALLOWED_DAYS+=("$parsed_day")
     else
       return 1
     fi
   done
 }
 
-# Check if current day is in allowed_days array
+# Check if current day is in ALLOWED_DAYS array
 is_reboot_day_allowed() {
   # If no restrictions set, allow any day
-  [[ ${#allowed_days[@]} -eq 0 ]] && return 0
+  ((${#ALLOWED_DAYS[@]} == 0)) && return 0 ||:
 
   local -- current_day=$(date +'%w')  # 0-6, 0=Sunday
   local -- allowed_day
 
-  for allowed_day in "${allowed_days[@]}"; do
-    [[ $current_day -eq $allowed_day ]] && return 0
+  for allowed_day in "${ALLOWED_DAYS[@]}"; do
+    (( current_day == allowed_day )) && return 0 ||:
   done
 
   return 1  # Current day not allowed
@@ -97,30 +99,30 @@ is_reboot_day_allowed() {
 
 # Check reboot conditions
 check_reboot_conditions() {
-  declare -g uptime_days reboot_needed
+  declare -g UPTIME_DAYS REBOOT_NEEDED
   # Check for reboot-required file
   if [[ -f /var/run/reboot-required ]]; then
-    reboot_needed=1
+    REBOOT_NEEDED=1
   fi
 
   # Check uptime threshold and calculate uptime days
-  local -- uptime_start=$(date -d "$(uptime -s)" +'%s' -u)
-  local -- current_time=$(date +'%s' -u)
-  uptime_days=$(( (current_time - uptime_start) / 86400))
+  local -- uptime_start=$(date -d "$(uptime -s)" +'%s')
+  local -- current_time=$(date +'%s')
+  UPTIME_DAYS=$(( (current_time - uptime_start) / 86400))
 
-  if (( uptime_days >= MACHINE_UPTIME_MAXDAYS )); then
-    reboot_needed=1
+  if (( UPTIME_DAYS >= MACHINE_UPTIME_MAXDAYS )); then
+    REBOOT_NEEDED=1
   fi
 
   # Force reboot overrides conditions
-  if (( force_reboot )); then
-    reboot_needed=1
+  if (( FORCE_REBOOT )); then
+    REBOOT_NEEDED=1
   fi
 }
 
 # Calculate delay until reboot time, considering allowed days
 calculate_reboot_delay() {
-  local -- target_time="$1"
+  local -- target_time=$1
   local -i current_epoch=$(date +'%s')
   local -i target_epoch
 
@@ -130,7 +132,7 @@ calculate_reboot_delay() {
     local -i minute=${BASH_REMATCH[2]}
 
     # If no day restrictions, use simple logic
-    if [[ ${#allowed_days[@]} -eq 0 ]]; then
+    if (( ${#ALLOWED_DAYS[@]} == 0 )); then
       # Calculate target time today
       target_epoch=$(date -d "today ${hour}:${minute}" +'%s')
 
@@ -146,18 +148,18 @@ calculate_reboot_delay() {
 
       # Check today at target time if it hasn't passed and today is allowed
       target_epoch=$(date -d "today ${hour}:${minute}" +'%s')
-      if (( target_epoch > current_epoch )) && is_reboot_day_allowed; then
+      if ((target_epoch > current_epoch)) && is_reboot_day_allowed; then
         found=1
       fi
 
       # If not found, search for next allowed day (up to 7 days ahead)
       if (( ! found )); then
-        for (( days_ahead=1; days_ahead<=7; days_ahead++ )); do
-          local -i check_day=$(( (current_day + days_ahead) % 7 ))
-          local -- allowed_day
-
-          for allowed_day in "${allowed_days[@]}"; do
-            if [[ $check_day -eq $allowed_day ]]; then
+        local -i check_day
+        local -- allowed_day
+        for ((days_ahead=1; days_ahead<=7; days_ahead+=1)); do
+          check_day=$(( (current_day + days_ahead) % 7 ))
+          for allowed_day in "${ALLOWED_DAYS[@]}"; do
+            if (( check_day == allowed_day )); then
               target_epoch=$(date -d "+${days_ahead} days ${hour}:${minute}" +'%s')
               found=1
               break 2
@@ -167,14 +169,14 @@ calculate_reboot_delay() {
       fi
 
       if (( ! found )); then
-        error "No valid reboot day found in next 7 days"
+        error 'No valid reboot day found in next 7 days'
         return 1
       fi
     fi
 
     echo $((target_epoch - current_epoch))
   else
-    error "Invalid time format '$target_time'. Use HH:MM format."
+    error "Invalid time format ${target_time@Q}. Use HH:MM format."
     return 1
   fi
 }
@@ -188,30 +190,32 @@ schedule_reboot() {
   systemd_run_required || return 1
 
   # Check systemd availability - allow running (0) or degraded (1) states
-  if ! systemctl is-system-running >/dev/null 2>&1; then
-    # Only fail if exit code > 1 (not just degraded)
-    if (( $? > 1 )); then
-      error "systemd is not running. This script requires systemd for reliable scheduling."
+  local -i sys_rc=0
+  systemctl is-system-running >/dev/null 2>&1 || sys_rc=$?
+  if (( sys_rc > 1 )); then
+      error 'systemd is not running. This script requires systemd for reliable scheduling.'
       return 1
-    fi
   fi
 
-
   # Schedule reboot using systemd-run
-  if (( ! dryrun )); then
+  if (( ! DRYRUN )); then
     # Log to syslog when actually scheduling a reboot
-    logger -t "$SCRIPT_NAME" "Scheduling system reboot in ${delay}s for user $XUSER (uptime: ${uptime_days}d)"
-    
+    logger -t "$SCRIPT_NAME" "Scheduling system reboot in ${delay}s for user $XUSER (uptime: ${UPTIME_DAYS}d)"
+
     if systemd-run --on-active="${delay}s" --timer-property=AccuracySec=1s \
       --unit="${SCRIPT_NAME}-$(date +%s)" \
       --description="Scheduled reboot by $SCRIPT_NAME" \
       bash -c "$reboot_cmd"; then
       # Log success if systemd-run succeeded
       logger -t "$SCRIPT_NAME" "Successfully scheduled reboot for $(date -d "now + ${delay} seconds" +'%F %T')"
+      info "systemd-run: Reboot scheduled in ${delay} seconds"
+    else
+      error "systemd-run: Failed to schedule reboot"
+      return 1
     fi
+  else
+    info "systemd-run: [DRY RUN] Reboot scheduled in ${delay} seconds"
   fi
-
-  info "systemd-run: $( (( ! dryrun)) || echo "[DRY RUN] ")Reboot scheduled in ${delay} seconds"
 }
 
 # List all scheduled auto-reboot timers
@@ -220,7 +224,7 @@ list_schedules() {
   local -- line
 
   echo "Active $SCRIPT_NAME schedules:"
-  echo "============================="
+  echo '============================='
 
   # Get all $SCRIPT_NAME timers with details
   local -- timer_output
@@ -232,28 +236,28 @@ list_schedules() {
   fi
   
   while IFS= read -r line; do
-    ((count+=1))
+    count+=1
     # Extract timer name and scheduled time from the line
     local -- timer_name=$(echo "$line" | grep -o "${SCRIPT_NAME}-[0-9]*\.timer")
     local -- scheduled_time=$(echo "$line" | awk '{print $1, $2, $3, $4}')
     echo "$count. $timer_name - Scheduled: $scheduled_time"
   done <<< "$timer_output"
   
-  echo "============================="
+  echo '============================='
   echo "Total: $count scheduled reboot(s)"
 }
 
 # Delete a specific $SCRIPT_NAME timer
 delete_schedule() {
-  local -- timer_name="$1"
+  local -- timer_name=$1
   
   # Validate timer name format
   if [[ ! $timer_name =~ ^${SCRIPT_NAME}-[0-9]+\.timer$ ]]; then
     # If just the ID was provided, construct full name
     if [[ $timer_name =~ ^[0-9]+$ ]]; then
-      timer_name="${SCRIPT_NAME}-${timer_name}.timer"
+      timer_name="$SCRIPT_NAME"-"$timer_name".timer
     elif [[ $timer_name =~ ^${SCRIPT_NAME}-[0-9]+$ ]]; then
-      timer_name="${timer_name}.timer"
+      timer_name="$timer_name".timer
     else
       error "Invalid timer name format. Use: ${SCRIPT_NAME}-TIMESTAMP or just TIMESTAMP"
       return 1
@@ -267,7 +271,7 @@ delete_schedule() {
   fi
   
   # Stop and remove both timer and service
-  local -- service_name="${timer_name%.timer}.service"
+  local -- service_name="${timer_name%.timer}".service
   
   info "Deleting $timer_name..."
   systemctl stop "$timer_name" 2>/dev/null || true
@@ -288,7 +292,7 @@ delete_all_schedules() {
   while IFS= read -r timer; do
     if [[ -n $timer ]]; then
       timers+=("$timer")
-      ((count+=1))
+      count+=1
     fi
   done < <(systemctl list-timers --all --no-pager 2>/dev/null | grep -o "${SCRIPT_NAME}-[0-9]*\.timer")
   
@@ -298,14 +302,18 @@ delete_all_schedules() {
   fi
   
   # Confirm deletion in non-dry-run mode
-  if (( ! dryrun )); then
+  if (( ! DRYRUN )); then
+    if [[ ! -t 0 ]]; then
+      error 'Cannot prompt for confirmation in non-interactive mode'
+      return 1
+    fi
     echo "Found $count $SCRIPT_NAME schedule(s):"
     printf '%s\n' "${timers[@]}"
     echo
-    read -p "Delete all schedules? [y/N] " -n 1 -r
+    read -p 'Delete all schedules? [y/N] ' -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-      info "Deletion cancelled."
+      info 'Deletion cancelled.'
       return 0
     fi
   fi
@@ -321,26 +329,26 @@ delete_all_schedules() {
 
 install_auto_reboot() {
   if ! command -v systemd-run >/dev/null 2>&1; then
-    info "Installing systemd-run (package systemd-container)"
+    info 'Installing systemd-run (package systemd-container)'
     sudo apt-get update --quiet --assume-yes || {
-      info "apt-get update failed"
+      info 'apt-get update failed'
       return 1
     }
     sudo apt-get install --quiet --assume-yes systemd-container || {
-      error "Install systemd-run failed"
+      error 'Install systemd-run failed'
       return 1
     }
   fi
   if ! command -v systemd-run >/dev/null 2>&1; then
-    error "Could not find systemd-run"
+    error 'Could not find systemd-run'
     return 1
   fi
-  info "systemd-container is installed"
+  info 'systemd-container is installed'
 
   local -- localbin=/usr/local/bin/"$SCRIPT_NAME"
   if [[ "$SCRIPT_PATH" != "$localbin" ]]; then
-    [[ -L $localbin ]] && rm "$localbin"
-    [[ -f $localbin ]] && rm "$localbin"
+    [[ -L $localbin ]] && rm "$localbin" ||:
+    [[ -f $localbin ]] && rm "$localbin" ||:
     ln -fs "$SCRIPT_PATH" "$localbin"
   fi
   chown "$XUSER":sudo "$SCRIPT_PATH"
@@ -352,135 +360,9 @@ install_auto_reboot() {
   return 0
 }
 
-main() {
-  # Check for root/sudo access first
-  if ((EUID)); then
-    if id -nG "${USER:-}" | grep -qw sudo || ((EUID==0)); then
-      sudo "$0" "$@"
-      exit
-    fi
-    >&2 echo "Requires root/sudo access"
-    exit 1
-  fi
-
-  # Parse command line arguments
-  while (($#)); do
-    case $1 in
-      -h|--help)
-        usage
-        return 0
-        ;;
-      -n|--dry-run|--dryrun)
-        dryrun=1 ;;
-      -N|--not-dry-run|--notdryrun)
-        dryrun=0 ;;
-      -f|--force-reboot)
-        force_reboot=1 ;;
-      -m|--max-uptime-days)
-        [[ $# -lt 2 ]] && { error "--max-uptime-days requires an argument"; return 1; }
-        if [[ $2 =~ ^[0-9]+$ ]] && [[ $2 -gt 0 ]]; then
-          MACHINE_UPTIME_MAXDAYS=$2
-          shift
-        else
-          error "--max-uptime-days must be a positive integer"; return 1
-        fi ;;
-      -r|--reboot-time)
-        [[ $# -lt 2 ]] && { error "--reboot-time requires an argument"; return 1; }
-        if [[ $2 =~ ^([0-9]{1,2}):([0-9]{2})$ ]]; then
-          local -i hour=${BASH_REMATCH[1]}
-          local -i minute=${BASH_REMATCH[2]}
-          if (( hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 )); then
-            MACHINE_REBOOT_TIME=$2
-            shift
-          else
-            error "--reboot-time must be valid time (00:00-23:59)"; return 1
-          fi
-        else
-          error "--reboot-time must be in HH:MM format"; return 1
-        fi ;;
-      -a|--allowed-days)
-        [[ $# -lt 2 ]] && { error "--allowed-days requires an argument"; return 1; }
-        if ! parse_allowed_days "$2"; then
-          return 1
-        fi
-        shift ;;
-      -i|--install)
-        install_auto_reboot
-        exit $?
-        ;;
-      -l|--list)
-        list_schedules
-        exit 0
-        ;;
-      -d|--delete)
-        [[ $# -lt 2 ]] && { error "--delete requires a timer name"; return 1; }
-        delete_schedule "$2"
-        exit $?
-        ;;
-      -D|--delete-all)
-        delete_all_schedules
-        exit $?
-        ;;
-      -V|--version)
-        echo "$SCRIPT_NAME $VERSION"
-        exit 0
-        ;;
-      -[hdNfmrailDV]*)
-        #shellcheck disable=SC2046
-        set -- '' $(printf -- "-%c " $(grep -o . <<<"${1:1}")) "${@:2}";;
-      *)
-        error "Unknown option '$1'"
-        usage; return 1 ;;
-    esac
-    shift
-  done
-  
-  systemd_run_required || return 1
-
-  # Check conditions now that all arguments are parsed
-  check_reboot_conditions
-
-  if ((reboot_needed)); then
-    echo "Host: $HOSTNAME"
-    echo "Status: Reboot required"
-    if [[ -f /var/run/reboot-required ]]; then
-      echo "  - Reason: System updates require reboot"
-    fi
-
-    if (( uptime_days >= MACHINE_UPTIME_MAXDAYS )); then
-      echo "  - Reason: Uptime (${uptime_days} days) exceeds maximum (${MACHINE_UPTIME_MAXDAYS} days)"
-    fi
-
-    (( force_reboot )) && echo "  - Reason: Force reboot requested"
-
-    # Calculate delay and schedule reboot
-    local -i delay
-    local -- target_time
-    if delay=$(calculate_reboot_delay "$MACHINE_REBOOT_TIME"); then
-      target_time=$(date -d "now + ${delay} seconds" +'%F %T %Z')
-      echo "Delay: $delay"
-      echo "Scheduled: $target_time"
-
-      schedule_reboot "$delay"
-
-      if (( dryrun )); then
-        info "[DRY RUN] Use '$SCRIPT_NAME' with option '-N' to execute"
-      fi
-    else
-      error "Failed to calculate reboot delay"
-      return 1
-    fi
-  else
-    echo "Host: $HOSTNAME"
-    echo "Uptime: $(uptime -p)"
-    echo "Reboot-required: $( [[ -f /var/run/reboot-required ]] && echo present || echo absent)"
-    echo "Status: Reboot not required"
-  fi
-}
-
 usage() {
-  cat << EOF
-$SCRIPT_NAME v1.1.1 - Intelligent system reboot scheduler
+  cat <<HELP
+$SCRIPT_NAME $VERSION - Intelligent system reboot scheduler
 
 DESCRIPTION:
     Schedule system reboots based on conditions:
@@ -546,25 +428,157 @@ CRON EXAMPLE:
     # Add to root's crontab for weekly Sunday 4:20 AM reboot if uptime > 14 days
     15 23 * * * $SCRIPT_NAME --max-uptime-days 14 --reboot-time 04:20 --allowed-days Sun -N
 
-EOF
-  systemd_run_required || return 1
+HELP
   return 0
 }
 
 systemd_run_required() {
   if ! command -v systemd-run >/dev/null 2>&1; then
-    error "Requires systemd-run from package systemd-container"
+    error 'Requires systemd-run from package systemd-container'
     if id -nG "${USER:-}" | grep -qw sudo || ((EUID==0)); then
       >&2 echo
-      info "Run:"
+      info 'Run:'
       echo "sudo $SCRIPT_NAME --install"
       >&2 echo
-      info "Or:"
-      echo "sudo apt update && sudo apt install systemd-container"
+      info 'Or:'
+      echo 'sudo apt update && sudo apt install systemd-container'
     fi
     return 1
   fi
   return 0
+}
+
+main() {
+  # Check for root/sudo access first
+  if ((EUID)); then
+    if id -nG "${USER:-}" | grep -qw sudo; then
+      sudo "$0" "$@"
+      exit
+    fi
+    >&2 echo 'Requires root/sudo access'
+    exit 1
+  fi
+
+  # Parse command line arguments
+  while (($#)); do
+    case $1 in
+      -h|--help)
+        usage
+        return 0
+        ;;
+      -n|--dry-run|--dryrun)
+        DRYRUN=1 ;;
+      -N|--not-dry-run|--notdryrun)
+        DRYRUN=0 ;;
+      -f|--force-reboot)
+        FORCE_REBOOT=1 ;;
+      -m|--max-uptime-days)
+        (($# < 2)) && { error '--max-uptime-days requires an argument'; return 1; }
+        if [[ $2 =~ ^[0-9]+$ ]] && (( $2 > 0 )); then
+          MACHINE_UPTIME_MAXDAYS=$2
+          shift
+        else
+          error '--max-uptime-days must be a positive integer'; return 1
+        fi ;;
+      -r|--reboot-time)
+        (($# < 2)) && { error '--reboot-time requires an argument'; return 1; }
+        if [[ $2 =~ ^([0-9]{1,2}):([0-9]{2})$ ]]; then
+          local -i hour=${BASH_REMATCH[1]}
+          local -i minute=${BASH_REMATCH[2]}
+          if (( hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 )); then
+            MACHINE_REBOOT_TIME=$2
+            shift
+          else
+            error '--reboot-time must be valid time (00:00-23:59)'; return 1
+          fi
+        else
+          error '--reboot-time must be in HH:MM format'; return 1
+        fi ;;
+      -a|--allowed-days)
+        (($#  < 2)) && { error '--allowed-days requires an argument'; return 1; }
+        if ! parse_allowed_days "$2"; then
+          return 1
+        fi
+        shift ;;
+      -i|--install)
+        install_auto_reboot
+        exit $?
+        ;;
+      -l|--list)
+        list_schedules
+        exit 0
+        ;;
+      -d|--delete)
+        [[ $# -lt 2 ]] && { error '--delete requires a timer name'; return 1; }
+        delete_schedule "$2"
+        exit $?
+        ;;
+      -D|--delete-all)
+        delete_all_schedules
+        exit $?
+        ;;
+      -V|--version)
+        echo "$SCRIPT_NAME $VERSION"
+        exit 0
+        ;;
+      -[hnNfmraildDV]?*) # Bundled short options
+        set -- "${1:0:2}" "-${1:2}" "${@:2}"
+        continue
+        ;;
+      *)
+        error "Unknown option ${1@Q}"
+        usage
+        return 1
+        ;;
+    esac
+    shift
+  done
+
+  readonly -- MACHINE_REBOOT_TIME MACHINE_UPTIME_MAXDAYS
+  readonly -- DRYRUN FORCE_REBOOT
+  readonly -a ALLOWED_DAYS
+
+  systemd_run_required || return 1
+
+  # Check conditions now that all arguments are parsed
+  check_reboot_conditions
+
+  if ((REBOOT_NEEDED)); then
+    echo "Host: $HOSTNAME"
+    echo 'Status: Reboot required'
+    if [[ -f /var/run/reboot-required ]]; then
+      echo '  - Reason: System updates require reboot'
+    fi
+
+    if (( UPTIME_DAYS >= MACHINE_UPTIME_MAXDAYS )); then
+      echo "  - Reason: Uptime (${UPTIME_DAYS} days) exceeds maximum (${MACHINE_UPTIME_MAXDAYS} days)"
+    fi
+
+    (( !FORCE_REBOOT )) || echo '  - Reason: Force reboot requested'
+
+    # Calculate delay and schedule reboot
+    local -i delay
+    local -- target_time
+    if delay=$(calculate_reboot_delay "$MACHINE_REBOOT_TIME"); then
+      target_time=$(date -d "now + ${delay} seconds" +'%F %T %Z')
+      echo "Delay: $delay"
+      echo "Scheduled: $target_time"
+
+      schedule_reboot "$delay"
+
+      if (( DRYRUN )); then
+        info "[DRY RUN] Use ${SCRIPT_NAME@Q} with option '-N' to execute"
+      fi
+    else
+      error 'Failed to calculate reboot delay'
+      return 1
+    fi
+  else
+    echo "Host: $HOSTNAME"
+    echo "Uptime: $(uptime -p)"
+    echo "Reboot-required: $( [[ -f /var/run/reboot-required ]] && echo present || echo absent)"
+    echo 'Status: Reboot not required'
+  fi
 }
 
 main "$@"
