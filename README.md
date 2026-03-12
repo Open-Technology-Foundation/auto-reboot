@@ -2,7 +2,7 @@
 
 Intelligent system reboot scheduler with flexible timing and day-of-week restrictions.
 
-**Version:** 1.1.1
+**Version:** 1.2.0
 **License:** GPL-3.0
 
 ## Overview
@@ -17,7 +17,7 @@ Dry-run by default. Requires explicit `-N` to execute.
 ## Requirements
 
 - Linux with systemd
-- Bash 4.0+ (5.0+ recommended)
+- Bash 5.2+
 - `systemd-run` (systemd-container package)
 - Root or sudo group membership
 
@@ -49,7 +49,7 @@ auto-reboot --install
 # Manual installation
 sudo cp auto-reboot /usr/local/bin/
 sudo chmod 770 /usr/local/bin/auto-reboot
-sudo chown root:sudo /usr/local/bin/auto-reboot
+sudo chown $USER:sudo /usr/local/bin/auto-reboot
 
 # Bash completion (optional)
 sudo cp .bash_completion /etc/bash_completion.d/auto-reboot
@@ -62,12 +62,14 @@ sudo cp .bash_completion /etc/bash_completion.d/auto-reboot
 | `-n, --dry-run` | Test mode, no execution (default) |
 | `-N, --not-dry-run` | Execute for real |
 | `-f, --force-reboot` | Force reboot regardless of conditions |
+| `-v, --verbose` | Verbose output (default) |
+| `-q, --quiet` | Suppress informational messages |
 | `-m, --max-uptime-days DAYS` | Max uptime before reboot (default: 14) |
 | `-r, --reboot-time HH:MM` | Scheduled reboot time (default: 22:00) |
 | `-a, --allowed-days DAYS` | Restrict to specific days (see below) |
 | `-l, --list` | List all scheduled reboots |
 | `-d, --delete TIMER` | Delete specific timer (ID or full name) |
-| `-D, --delete-all` | Delete all timers (with confirmation) |
+| `-D, --delete-all` | Delete all timers (confirms with `-N`) |
 | `-i, --install` | Install to /usr/local/bin with dependencies |
 | `-V, --version` | Show version |
 | `-h, --help` | Show help |
@@ -106,13 +108,13 @@ CLI options override environment variables.
 
 ```bash
 # Daily check at 11 PM, reboot Sunday at 4 AM if needed
-0 23 * * * /usr/local/bin/auto-reboot -m 14 -r 04:00 -a Sun -N
+0 23 * * * /usr/local/bin/auto-reboot -q -m 14 -r 04:00 -a Sun -N
 
 # Check every 6 hours, reboot anytime if uptime > 30 days
-0 */6 * * * /usr/local/bin/auto-reboot -m 30 -N
+0 */6 * * * /usr/local/bin/auto-reboot -q -m 30 -N
 
 # Weekly forced reboot Sunday at 3 AM
-0 2 * * 0 /usr/local/bin/auto-reboot -f -r 03:00 -N
+0 2 * * 0 /usr/local/bin/auto-reboot -q -f -r 03:00 -N
 ```
 
 ### Schedule Management
@@ -124,8 +126,8 @@ auto-reboot --list
 # Delete by timestamp ID
 auto-reboot --delete 1753063354
 
-# Delete all (prompts for confirmation)
-auto-reboot -D
+# Delete all (add -N to trigger confirmation prompt)
+auto-reboot -ND
 ```
 
 ## Logging
@@ -167,6 +169,9 @@ journalctl -t auto-reboot --since "1 hour ago"
 ```
 auto-reboot          # Main script
 .bash_completion     # Tab completion for bash
+run_tests.sh         # BATS test runner
+tests/               # BATS test suite (6 files + test_helper.bash)
+AUDIT-BASH.md        # BCS compliance audit report
 LICENSE              # GPL-3.0
 README.md            # This file
 ```

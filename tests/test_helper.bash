@@ -3,9 +3,9 @@
 #
 # Provides:
 # - setup/teardown with temp dirs and mock PATH
-# - source_script() to source auto-reboot functions (strips PATH lock + main)
-# - run_script() to run auto-reboot as executable with mocked commands
-# - Mock creators for systemctl, systemd-run, logger, date, uptime, sudo
+# - source_script() to source auto-reboot for unit testing individual functions
+# - run_script() to run main() in a subshell for CLI/integration testing
+# - Mock creators for systemctl, systemd-run, logger, date, uptime, sudo, id, reboot-required
 # - Custom assertions
 #
 
@@ -44,10 +44,13 @@ _common_teardown() {
 
 # ── Source Script (for unit testing functions) ────────────────────
 
-# source_script — sources auto-reboot with dangerous lines stripped:
-#   1. declare -rx PATH=...  (would lock PATH, breaking mock injection)
-#   2. main "$@"             (would auto-execute on source)
-#   3. readonly declarations in main (would lock variables between tests)
+# source_script — sources auto-reboot with test-incompatible lines stripped:
+#   1. declare -rx PATH=...        (would lock PATH, breaking mock injection)
+#   2. main "$@"                   (would auto-execute on source)
+#   3. set -e / inherit_errexit    (relaxed so BATS can catch failures)
+#   4. declare -r metadata vars    (SCRIPT_PATH, SCRIPT_NAME, VERSION, XUSER —
+#                                   re-exported as mutable env vars below)
+#   5. Terminal color detection     (block removed; colors set to empty strings)
 #
 # After sourcing, all functions (parse_day, _msg, etc.) are available
 # in the current shell with mock PATH prepended.
@@ -76,9 +79,10 @@ source_script() {
   # Set script metadata as exports so `run` subshells can access them
   export SCRIPT_PATH="${SCRIPT_UNDER_TEST}"
   export SCRIPT_NAME="auto-reboot"
-  export VERSION="1.1.1"
+  export VERSION="1.2.0"
   export XUSER="${USER:-testuser}"
   export RED='' CYAN='' NC=''
+  export VERBOSE=1
 
   # Source the sanitized script
   # shellcheck disable=SC1090
@@ -88,7 +92,8 @@ source_script() {
 # ── Run Script (for integration/CLI testing) ──────────────────────
 
 # run_script — runs main() with arguments in a clean subshell.
-# Uses source_script's sanitized file and strips the sudo/EUID check.
+# Creates its own sanitized copy (same transforms as source_script,
+# plus strips the sudo/EUID auto-elevation block).
 # Sets BATS $status and $output variables.
 #
 run_script() {
@@ -113,7 +118,7 @@ run_script() {
     export PATH="'"${MOCK_BIN}:${ORIG_PATH}"'"
     export SCRIPT_PATH="'"${SCRIPT_UNDER_TEST}"'"
     export SCRIPT_NAME="auto-reboot"
-    export VERSION="1.1.1"
+    export VERSION="1.2.0"
     export XUSER="${USER:-testuser}"
     export RED="" CYAN="" NC=""
     export MOCK_LOG="'"${MOCK_LOG}"'"

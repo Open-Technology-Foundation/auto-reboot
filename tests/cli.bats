@@ -37,13 +37,13 @@ teardown() {
   run_script -V
   [[ "$status" -eq 0 ]]
   assert_output_contains "auto-reboot"
-  assert_output_contains "1.1.1"
+  assert_output_contains "1.2.0"
 }
 
 @test "cli: --version shows version" {
   run_script --version
   [[ "$status" -eq 0 ]]
-  assert_output_contains "1.1.1"
+  assert_output_contains "1.2.0"
 }
 
 # ── Dry run flags ─────────────────────────────────────────────────
@@ -66,6 +66,42 @@ teardown() {
 @test "cli: --not-dry-run is accepted" {
   run_script --not-dry-run
   [[ "$status" -eq 0 ]]
+}
+
+# ── Verbose / Quiet ──────────────────────────────────────────────
+
+@test "cli: -v sets verbose (default)" {
+  run_script -v
+  [[ "$status" -eq 0 ]]
+}
+
+@test "cli: --verbose is accepted" {
+  run_script --verbose
+  [[ "$status" -eq 0 ]]
+}
+
+@test "cli: -q sets quiet" {
+  run_script -q
+  [[ "$status" -eq 0 ]]
+}
+
+@test "cli: --quiet suppresses info messages" {
+  run_script --quiet -f
+  [[ "$status" -eq 0 ]]
+  assert_output_not_contains "DRY RUN"
+}
+
+@test "cli: -q still shows status output" {
+  run_script -q -f
+  [[ "$status" -eq 0 ]]
+  assert_output_contains "Reboot required"
+}
+
+@test "cli: bundled -Nqf works" {
+  run_script -Nqf
+  [[ "$status" -eq 0 ]]
+  assert_output_contains "Reboot required"
+  assert_output_not_contains "DRY RUN"
 }
 
 # ── Force reboot ──────────────────────────────────────────────────

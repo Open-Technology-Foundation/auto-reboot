@@ -1,0 +1,274 @@
+.\" auto-reboot(1) - Schedule conditional system reboots via systemd timers
+.TH AUTO\-REBOOT 1 "2026-03-12" "1.2.0" "System Administration"
+.
+.SH NAME
+auto\-reboot \- schedule conditional system reboots via systemd timers
+.
+.SH SYNOPSIS
+.B auto\-reboot
+.RI [ OPTIONS ]
+.
+.SH DESCRIPTION
+.B auto\-reboot
+schedules system reboots via systemd transient timers based on configurable
+conditions. It checks whether the system requires a reboot due to pending
+updates or excessive uptime, then schedules a reboot at the specified time
+using
+.BR systemd\-run (1).
+.PP
+Dry\-run is the default mode. Use
+.B \-N
+to execute for real.
+.PP
+Reboot conditions (any triggers scheduling):
+.IP \(bu 2
+System updates require reboot
+.RI ( /var/run/reboot\-required " exists)"
+.IP \(bu 2
+Uptime exceeds maximum threshold (default: 14 days)
+.IP \(bu 2
+Manual force reboot via
+.B \-f
+.PP
+The script automatically elevates to root via
+.BR sudo (8)
+if the invoking user is in the sudo group.
+.
+.SH OPTIONS
+.SS "Execution Mode"
+.TP
+.BR \-n ", " \-\-dry\-run
+Test mode, no execution. This is the default.
+.TP
+.BR \-N ", " \-\-not\-dry\-run
+Execute for real.
+.TP
+.BR \-f ", " \-\-force\-reboot
+Force reboot regardless of conditions. Bypasses reboot\-required and uptime
+checks; time and day restrictions still apply.
+.
+.SS "Output Control"
+.TP
+.BR \-v ", " \-\-verbose
+Verbose output. This is the default.
+.TP
+.BR \-q ", " \-\-quiet
+Suppress informational messages. Error messages are always shown.
+Recommended for cron usage.
+.
+.SS "Scheduling"
+.TP
+.BR \-m ", " \-\-max\-uptime\-days " \fIDAYS\fR"
+Maximum uptime in days before a reboot is triggered.
+Must be a positive integer. Default: 14.
+.TP
+.BR \-r ", " \-\-reboot\-time " \fIHH:MM\fR"
+Time to schedule the reboot in 24\-hour format.
+Valid range: 00:00 to 23:59. Default: 22:00.
+.TP
+.BR \-a ", " \-\-allowed\-days " \fIDAYS\fR"
+Restrict reboots to specific days of the week. Accepts a comma\-separated
+list of day names or numbers. See
+.B DAY SPECIFICATIONS
+below. When omitted, any day is allowed.
+.
+.SS "Schedule Management"
+.TP
+.BR \-l ", " \-\-list
+List all active auto\-reboot timers.
+.TP
+.BR \-d ", " \-\-delete " \fITIMER\fR"
+Delete a specific auto\-reboot timer.
+.I TIMER
+can be the full name
+.RI ( auto\-reboot\-1234.timer ),
+partial name
+.RI ( auto\-reboot\-1234 ),
+or just the numeric ID
+.RI ( 1234 ).
+.TP
+.BR \-D ", " \-\-delete\-all
+Delete all auto\-reboot timers. Prompts for confirmation when used with
+.BR \-N .
+.
+.SS "Other"
+.TP
+.BR \-i ", " \-\-install
+Install auto\-reboot to
+.I /usr/local/bin
+and install the
+.B systemd\-container
+package if needed.
+.TP
+.BR \-V ", " \-\-version
+Print version and exit.
+.TP
+.BR \-h ", " \-\-help
+Print help text and exit.
+.PP
+Short options can be bundled:
+.B \-Nqf
+is equivalent to
+.BR "\-N \-q \-f" .
+.
+.SH DAY SPECIFICATIONS
+The
+.B \-\-allowed\-days
+option accepts comma\-separated values in any of these formats:
+.PP
+.TS
+l l.
+Short names	Sun, Mon, Tue, Wed, Thu, Fri, Sat
+Full names	Sunday, Monday, \&..., Saturday
+Numbers	0 (Sunday) through 6 (Saturday)
+Mixed	Mon,Wed,5
+.TE
+.PP
+Case insensitive. Whitespace around commas is ignored.
+.
+.SH ENVIRONMENT
+.TP
+.B MACHINE_REBOOT_TIME
+Default reboot time in HH:MM format. Default: 22:00.
+Overridden by
+.BR \-\-reboot\-time .
+.TP
+.B MACHINE_UPTIME_MAXDAYS
+Default maximum uptime in days. Default: 14.
+Overridden by
+.BR \-\-max\-uptime\-days .
+.
+.SH SCHEDULING LOGIC
+.IP 1. 3
+.B No day restrictions:
+Schedules for today at the specified time, or tomorrow if that time has
+already passed.
+.IP 2. 3
+.B With day restrictions:
+Scans up to 7 days ahead for the next allowed day at the specified time.
+.IP 3. 3
+.B Force reboot:
+Bypasses reboot\-required and uptime checks. Time and day restrictions
+still apply.
+.PP
+Timers are created as systemd transient units named
+.IR auto\-reboot\-EPOCH .timer
+using
+.BR systemd\-run (1)
+with
+.BR AccuracySec=1s .
+.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+General error (systemd not running, scheduling failed, root required).
+.TP
+.B 22
+Invalid argument (bad time format, invalid day, missing option value).
+.
+.SH EXAMPLES
+Check if reboot is needed (dry run):
+.PP
+.RS
+.nf
+auto\-reboot
+.fi
+.RE
+.PP
+Schedule reboot if conditions are met:
+.PP
+.RS
+.nf
+auto\-reboot \-N
+.fi
+.RE
+.PP
+Force reboot at 3 AM, quietly:
+.PP
+.RS
+.nf
+auto\-reboot \-Nqf \-r 03:00
+.fi
+.RE
+.PP
+Restrict to weekends only:
+.PP
+.RS
+.nf
+auto\-reboot \-a Sat,Sun \-r 04:00 \-N
+.fi
+.RE
+.PP
+List and delete scheduled reboots:
+.PP
+.RS
+.nf
+auto\-reboot \-\-list
+auto\-reboot \-\-delete 1753063354
+auto\-reboot \-ND
+.fi
+.RE
+.
+.SS "Cron Integration"
+.PP
+.RS
+.nf
+# Daily check, reboot Sunday at 4 AM if uptime > 14 days
+0 23 * * * /usr/local/bin/auto\-reboot \-q \-m 14 \-r 04:00 \-a Sun \-N
+
+# Check every 6 hours, reboot if uptime > 30 days
+0 */6 * * * /usr/local/bin/auto\-reboot \-q \-m 30 \-N
+
+# Weekly forced reboot Sunday at 3 AM
+0 2 * * 0 /usr/local/bin/auto\-reboot \-qf \-r 03:00 \-N
+.fi
+.RE
+.
+.SH FILES
+.TP
+.I /var/run/reboot\-required
+Presence triggers a reboot. Created by package managers when kernel or
+library updates require a restart.
+.TP
+.I /usr/local/bin/auto\-reboot
+Default installation location (via
+.BR \-\-install ).
+.
+.SH LOGGING
+All schedule and delete operations are logged to syslog via
+.BR logger (1)
+with tag
+.BR auto\-reboot .
+View logs with:
+.PP
+.RS
+.nf
+journalctl \-t auto\-reboot
+.fi
+.RE
+.
+.SH DEPENDENCIES
+.TP
+.BR systemd\-run (1)
+From the
+.B systemd\-container
+package. Install with
+.B auto\-reboot \-\-install
+or
+.BR "apt install systemd\-container" .
+.
+.SH SEE ALSO
+.BR systemd\-run (1),
+.BR systemctl (1),
+.BR shutdown (8),
+.BR sudo (8),
+.BR logger (1)
+.
+.SH AUTHOR
+Biksu Okusi <biksu@okusi.id>
+.
+.SH LICENSE
+GPL\-3.0

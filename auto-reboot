@@ -6,7 +6,7 @@ set -euo pipefail
 shopt -s inherit_errexit
 
 # Script metadata
-declare -r VERSION=1.1.1
+declare -r VERSION=1.2.0
 #shellcheck disable=SC2155 # realpath return checked by set -e
 declare -r SCRIPT_PATH=$(realpath -- "$0")
 declare -r SCRIPT_NAME=${SCRIPT_PATH##*/}
@@ -20,6 +20,7 @@ declare -i MACHINE_UPTIME_MAXDAYS=${MACHINE_UPTIME_MAXDAYS:-14}
 
 # Runtime state (frozen readonly after argument parsing)
 declare -i REBOOT_NEEDED=0 DRY_RUN=1 FORCE_REBOOT=0 UPTIME_DAYS=0
+declare -i VERBOSE=1
 declare -a ALLOWED_DAYS=()  # Numeric days 0-6, 0=Sunday
 
 # Audit trail: original invoking user
@@ -44,11 +45,107 @@ _msg() {
   for msg in "$@"; do printf '%s %s\n' "$prefix" "$msg"; done
 }
 error() { >&2 _msg "$@"; }
-info() { >&2 _msg "$@"; }
+info() { ((VERBOSE)) || return 0; >&2 _msg "$@"; }
 die() { (($# < 2)) || error "${@:2}"; exit "${1:-0}"; }
 
 # Argument validation helper
 noarg() { (($# > 1)) || die 22 "Option ${1@Q} requires an argument"; }
+
+# Display help text
+usage() {
+  cat <<HELP
+$SCRIPT_NAME $VERSION - Intelligent system reboot scheduler
+
+DESCRIPTION:
+    Schedule conditional system reboots via systemd timers.
+    Dry-run by default; use -N to execute.
+
+    Reboot conditions:
+      • System updates require reboot (/var/run/reboot-required)
+      • Uptime exceeds maximum threshold
+      • Manual force reboot request
+
+    Features day-of-week restrictions, flexible scheduling,
+    and comprehensive audit logging.
+
+USAGE:
+    $SCRIPT_NAME [OPTIONS]
+    Designed for both interactive use and cron scheduling.
+
+DEPENDENCIES:
+    systemd-run (from systemd-container package)
+
+OPTIONS:
+    -f, --force-reboot
+                  Unconditional reboot. Ignore reboot-required and uptime.
+    -n, --dry-run
+                  Dry run only. Do not execute (default is dry run).
+    -N, --not-dry-run
+                  Execute (not a dry run)
+    -v, --verbose Verbose output (default)
+    -q, --quiet   Suppress informational messages
+    -h, --help    Show this help message
+    -i, --install Install $SCRIPT_NAME to /usr/local/bin and dependencies
+    -V, --version Show version information
+
+    -m, --max-uptime-days DAYS
+                  Maximum uptime in days before forced reboot (default: 14)
+    -r, --reboot-time HH:MM
+                  Time to schedule reboot in HH:MM format (default: 22:00)
+    -a, --allowed-days DAYS
+                  Restrict reboots to specific days of week
+                  DAYS can be: Sun,Mon,Tue,Wed,Thu,Fri,Sat
+                  Or: Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday
+                  Or: 0,1,2,3,4,5,6 (0=Sunday)
+                  Multiple days: --allowed-days Sun,Mon,Fri
+
+SCHEDULE MANAGEMENT:
+    -l, --list    List all scheduled $SCRIPT_NAME timers
+    -d, --delete TIMER
+                  Delete a specific $SCRIPT_NAME timer
+                  TIMER can be: full name (${SCRIPT_NAME}-1234.timer),
+                  partial name (${SCRIPT_NAME}-1234), or just ID (1234)
+    -D, --delete-all
+                  Delete all scheduled $SCRIPT_NAME timers
+                  (asks for confirmation)
+
+ENVIRONMENT VARIABLES:
+    MACHINE_REBOOT_TIME
+                  Time to schedule reboot (default: 22:00)
+                  Overridden by --reboot-time option
+    MACHINE_UPTIME_MAXDAYS
+                  Maximum uptime in days (default: 14)
+                  Overridden by --max-uptime-days option
+
+EXAMPLES:
+    $SCRIPT_NAME --dry-run
+    $SCRIPT_NAME --max-uptime-days 14 --reboot-time 04:20 --allowed-days Sun -N
+    $SCRIPT_NAME --allowed-days Mon,Wed,Fri --reboot-time 22:30 -N
+
+CRON EXAMPLE:
+    # Add to root's crontab for weekly Sunday 4:20 AM reboot if uptime > 14 days
+    15 23 * * * $SCRIPT_NAME --max-uptime-days 14 --reboot-time 04:20 --allowed-days Sun -N
+
+HELP
+  return 0
+}
+
+# Verify systemd-run is available; print install hints if missing
+systemd_run_required() {
+  if ! command -v systemd-run &>/dev/null; then
+    error 'Requires systemd-run from package systemd-container'
+    if id -nG "${USER:-}" | grep -qw sudo || ((EUID==0)); then
+      >&2 echo
+      info 'Run:'
+      >&2 echo "sudo $SCRIPT_NAME --install"
+      >&2 echo
+      info 'Or:'
+      >&2 echo 'sudo apt update && sudo apt install systemd-container'
+    fi
+    return 1
+  fi
+  return 0
+}
 
 # Parse day specification (Sun, Sunday, 0, etc.) to numeric day (0-6)
 parse_day() {
@@ -97,7 +194,7 @@ is_reboot_day_allowed() {
   current_day=$(date +'%w')  # 0-6, 0=Sunday
 
   for allowed_day in "${ALLOWED_DAYS[@]}"; do
-    (( current_day == allowed_day )) && return 0 ||:
+    if (( current_day == allowed_day )); then return 0; fi
   done
 
   return 1
@@ -194,10 +291,10 @@ schedule_reboot() {
 
   # Allow running (0) or degraded (1) systemd states
   local -i sys_rc=0
-  systemctl is-system-running >/dev/null 2>&1 || sys_rc=$?
+  systemctl is-system-running &>/dev/null || sys_rc=$?
   if (( sys_rc > 1 )); then
-      error 'systemd is not running. This script requires systemd for reliable scheduling.'
-      return 1
+    error 'systemd is not running. This script requires systemd for reliable scheduling.'
+    return 1
   fi
 
   if (( ! DRY_RUN )); then
@@ -325,10 +422,10 @@ delete_all_schedules() {
 
 # Install script to /usr/local/bin and ensure systemd-run is available
 install_auto_reboot() {
-  if ! command -v systemd-run >/dev/null 2>&1; then
+  if ! command -v systemd-run &>/dev/null; then
     info 'Installing systemd-run (package systemd-container)'
     sudo apt-get update --quiet --assume-yes || {
-      info 'apt-get update failed'
+      error 'apt-get update failed'
       return 1
     }
     sudo apt-get install --quiet --assume-yes systemd-container || {
@@ -336,7 +433,7 @@ install_auto_reboot() {
       return 1
     }
   fi
-  if ! command -v systemd-run >/dev/null 2>&1; then
+  if ! command -v systemd-run &>/dev/null; then
     error 'Could not find systemd-run'
     return 1
   fi
@@ -344,8 +441,8 @@ install_auto_reboot() {
 
   local -- localbin=/usr/local/bin/"$SCRIPT_NAME"
   if [[ "$SCRIPT_PATH" != "$localbin" ]]; then
-    [[ ! -L $localbin ]] || rm "$localbin"
-    [[ ! -f $localbin ]] || rm "$localbin"
+    [[ ! -L "$localbin" ]] || rm "$localbin"
+    [[ ! -f "$localbin" ]] || rm "$localbin"
     ln -fs "$SCRIPT_PATH" "$localbin"
   fi
   chown "$XUSER":sudo "$SCRIPT_PATH"
@@ -354,100 +451,6 @@ install_auto_reboot() {
   chmod 770 "$localbin"
 
   info "$SCRIPT_NAME is installed at ${localbin@Q}"
-  return 0
-}
-
-# Display help text
-usage() {
-  cat <<HELP
-$SCRIPT_NAME $VERSION - Intelligent system reboot scheduler
-
-DESCRIPTION:
-    Schedule conditional system reboots via systemd timers.
-    Dry-run by default; use -N to execute.
-
-    Reboot conditions:
-      • System updates require reboot (/var/run/reboot-required)
-      • Uptime exceeds maximum threshold
-      • Manual force reboot request
-
-    Features day-of-week restrictions, flexible scheduling,
-    and comprehensive audit logging.
-
-USAGE:
-    $SCRIPT_NAME [OPTIONS]
-    Designed for both interactive use and cron scheduling.
-
-DEPENDENCIES:
-    systemd-run (from systemd-container package)
-
-OPTIONS:
-    -f, --force-reboot
-                  Unconditional reboot. Ignore reboot-required and uptime.
-    -n, --dry-run
-                  Dry run only. Do not execute (default is dry run).
-    -N, --not-dry-run
-                  Execute (not a dry run)
-    -h, --help    Show this help message
-    -i, --install Install $SCRIPT_NAME to /usr/local/bin and dependencies
-    -V, --version Show version information
-
-    -m, --max-uptime-days DAYS
-                  Maximum uptime in days before forced reboot (default: 14)
-    -r, --reboot-time HH:MM
-                  Time to schedule reboot in HH:MM format (default: 22:00)
-    -a, --allowed-days DAYS
-                  Restrict reboots to specific days of week
-                  DAYS can be: Sun,Mon,Tue,Wed,Thu,Fri,Sat
-                  Or: Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday
-                  Or: 0,1,2,3,4,5,6 (0=Sunday)
-                  Multiple days: --allowed-days Sun,Mon,Fri
-
-SCHEDULE MANAGEMENT:
-    -l, --list    List all scheduled $SCRIPT_NAME timers
-    -d, --delete TIMER
-                  Delete a specific $SCRIPT_NAME timer
-                  TIMER can be: full name (${SCRIPT_NAME}-1234.timer),
-                  partial name (${SCRIPT_NAME}-1234), or just ID (1234)
-    -D, --delete-all
-                  Delete all scheduled $SCRIPT_NAME timers
-                  (asks for confirmation)
-
-ENVIRONMENT VARIABLES:
-    MACHINE_REBOOT_TIME
-                  Time to schedule reboot (default: 22:00)
-                  Overridden by --reboot-time option
-    MACHINE_UPTIME_MAXDAYS
-                  Maximum uptime in days (default: 14)
-                  Overridden by --max-uptime-days option
-
-EXAMPLES:
-    $SCRIPT_NAME --dry-run
-    $SCRIPT_NAME --max-uptime-days 14 --reboot-time 04:20 --allowed-days Sun -N
-    $SCRIPT_NAME --allowed-days Mon,Wed,Fri --reboot-time 22:30 -N
-
-CRON EXAMPLE:
-    # Add to root's crontab for weekly Sunday 4:20 AM reboot if uptime > 14 days
-    15 23 * * * $SCRIPT_NAME --max-uptime-days 14 --reboot-time 04:20 --allowed-days Sun -N
-
-HELP
-  return 0
-}
-
-# Verify systemd-run is available; print install hints if missing
-systemd_run_required() {
-  if ! command -v systemd-run >/dev/null 2>&1; then
-    error 'Requires systemd-run from package systemd-container'
-    if id -nG "${USER:-}" | grep -qw sudo || ((EUID==0)); then
-      >&2 echo
-      info 'Run:'
-      >&2 echo "sudo $SCRIPT_NAME --install"
-      >&2 echo
-      info 'Or:'
-      >&2 echo 'sudo apt update && sudo apt install systemd-container'
-    fi
-    return 1
-  fi
   return 0
 }
 
@@ -474,6 +477,10 @@ main() {
         DRY_RUN=1 ;;
       -N|--not-dry-run|--notdryrun)
         DRY_RUN=0 ;;
+      -v|--verbose)
+        VERBOSE=1 ;;
+      -q|--quiet)
+        VERBOSE=0 ;;
       -f|--force-reboot)
         FORCE_REBOOT=1 ;;
       -m|--max-uptime-days)
@@ -524,7 +531,8 @@ main() {
         echo "$SCRIPT_NAME $VERSION"
         exit 0
         ;;
-      -[hnNfmraildDV]?*) # Expand bundled short opts: -Nf becomes -N -f
+      --) shift; break ;;
+      -[hnNfvqmraildDV]?*) # Expand bundled short opts: -Nf becomes -N -f
         set -- "${1:0:2}" "-${1:2}" "${@:2}"
         continue
         ;;
@@ -538,8 +546,8 @@ main() {
   done
 
   # Freeze configuration after argument parsing
-  readonly MACHINE_REBOOT_TIME MACHINE_UPTIME_MAXDAYS
-  readonly DRY_RUN FORCE_REBOOT
+  readonly -- MACHINE_REBOOT_TIME MACHINE_UPTIME_MAXDAYS
+  readonly -- DRY_RUN FORCE_REBOOT VERBOSE
   readonly -a ALLOWED_DAYS
 
   systemd_run_required || return 1

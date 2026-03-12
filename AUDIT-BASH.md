@@ -1,37 +1,50 @@
 # Bash Audit Report: auto-reboot
 
-**Date**: 2026-03-05
+**Date**: 2026-03-12
 **Auditor**: Leet (Bash 5.2+ Raw Code Audit)
-**Script**: `auto-reboot` v1.1.1
-**Lines**: 586 (including `#fin`)
+**Script**: `auto-reboot` v1.2.0
+**Lines**: 587 (including `#fin`)
 **Functions**: 15
-**BCS Tier**: Complete (symlink → `/usr/local/share/yatti/bash-coding-standard/data/BASH-CODING-STANDARD.md`)
+**Supporting Files**: `run_tests.sh` (63 lines), `.bash_completion` (58 lines), `tests/test_helper.bash` (326 lines), 6 BATS test suites (1084 lines)
+**Total Project Lines**: 2055
+**BCS Tier**: Complete
 
 ---
 
 ## Executive Summary
 
-**Overall Health Score: 7.5/10**
+**Overall Health Score: 8/10**
 
-The script is well-structured with strong BCS adherence, proper `set -euo pipefail`, `shopt -s inherit_errexit`, correct variable typing, and clean function organization. However, a **critical argument-parsing bug** causes two options to silently consume the next argument. Three SC2015 violations and several minor BCS gaps round out the findings.
+The script is well-architected with strong BCS fundamentals: correct `set -euo pipefail` + `shopt -s inherit_errexit`, proper typed declarations, clean function design, comprehensive quoting discipline, locked PATH, and a well-structured test suite with 127 passing tests. The critical double-shift bug from the previous audit (2026-03-05) has been resolved.
+
+Remaining issues are concentrated in six BCS violations (function ordering, missing verbosity flags, wrong message function, verbose redirection syntax, unquoted file test variables, inconsistent indentation), one ShellCheck SC2015, and minor issues in supporting files.
 
 | Severity | Count |
 |----------|-------|
-| Critical | 1     |
-| High     | 1     |
+| Critical | 0     |
+| High     | 2     |
 | Medium   | 6     |
-| Low      | 3     |
+| Low      | 4     |
 
-### Top Critical Issue
-Double-shift bug in `--reboot-time` and `--allowed-days` silently eats the following command-line argument.
+### Previous Audit Resolutions
+
+| Previous Finding | Status |
+|------------------|--------|
+| CRITICAL-01: Double-shift bug in `--reboot-time`/`--allowed-days` | **Fixed** |
+| HIGH-01: SC2015 at lines 94, 351, 352 (3 instances) | **Partially fixed** (2 of 3 resolved, 1 remains at line 100) |
 
 ### Quick Wins
-- Remove the extra `shift` on lines 491 and 503
-- Replace `&& ... ||:` with explicit `if/then`
+
+- Fix 4x `>/dev/null 2>&1` to `&>/dev/null` (BCS0711)
+- Fix 2x unquoted variables in file tests (BCS0901)
+- Fix 1x indentation inconsistency (BCS1201)
+- Change `info` to `error` in `install_auto_reboot()` failure path (BCS0703)
 
 ### Long-term Recommendations
-- Define BCS exit code constants
-- Add `SCRIPT_DIR` metadata variable
+
+- Reorder functions to BCS0107 bottom-up layering
+- Add `VERBOSE`/`DEBUG` message control flags (BCS0701)
+- Add `--` end-of-options separator in parse loop (BCS0801)
 
 ---
 
@@ -41,312 +54,308 @@ Double-shift bug in `--reboot-time` and `--allowed-days` silently eats the follo
 shellcheck -x auto-reboot
 ```
 
-**3 findings (all SC2015 — info level):**
+**1 finding (SC2015 — info level):**
 
-| Line | Code | Description |
-|------|------|-------------|
-| 94   | SC2015 | `A && B \|\| C` is not if-then-else |
-| 351  | SC2015 | `A && B \|\| C` is not if-then-else |
-| 352  | SC2015 | `A && B \|\| C` is not if-then-else |
+| Line | Code   | Description |
+|------|--------|-------------|
+| 100  | SC2015 | `A && B \|\| C` is not if-then-else |
 
 **Suppressed directives:**
 
-| Line | Code | Justification | Verdict |
-|------|------|---------------|---------|
-| 8    | SC2155 | "realpath return checked by set -e" | Scope too broad (file-level) — should be line-local |
+| Line | Code   | Justification | Verdict |
+|------|--------|---------------|---------|
+| 10   | SC2155 | "realpath return checked by set -e" | Valid — correctly scoped to line 11 |
+
+### ShellCheck: Supporting Files
+
+**`run_tests.sh`** — 2 findings:
+
+| Line | Code   | Description |
+|------|--------|-------------|
+| 5    | SC2155 | Declare and assign separately (`SCRIPT_DIR`) |
+| 18   | SC2034 | `GREEN` appears unused |
+
+**`.bash_completion`** — 9 findings:
+
+| Line | Code   | Description |
+|------|--------|-------------|
+| 1    | SC2148 | Missing shebang/shell directive (false positive — sourced file) |
+| 14,19,29,31,43,52 | SC2207 | Prefer `mapfile` to split `compgen` output (6 instances) |
+| 42   | SC2155 | Declare and assign separately (`timer_ids`) |
+| 42   | SC2001 | Use `${variable//search/replace}` instead of `sed` |
 
 ---
 
 ## BCS Compliance
 
-`bcscheck` completed without violations. Manual review follows.
+**bcscheck result: 76% compliance (NEEDS_WORK)**
 
-### BCS0101 — Script Structure ✓ (with gaps)
+6 rules violated (11 instances), 3 suggestions.
+
+### BCS0101 — Script Structure
 
 | Element | Status | Location |
 |---------|--------|----------|
 | Shebang `#!/usr/bin/env bash` | ✓ | Line 1 |
-| Description comment | ✓ | Line 2 |
-| `set -euo pipefail` | ✓ | Line 3 |
-| `shopt -s inherit_errexit` | ✓ | Line 4 |
-| `VERSION` (declare -r) | ✓ | Line 7 |
-| `SCRIPT_PATH` (declare -r) | ✓ | Line 9 |
-| `SCRIPT_NAME` (declare -r) | ✓ | Line 10 |
-| `SCRIPT_DIR` (declare -r) | ✗ Missing | — |
-| Global declarations | ✓ | Lines 12–22 |
-| Color definitions | ✓ | Lines 25–29 |
-| Utility functions | ✓ | Lines 32–45 |
-| Business logic functions | ✓ | Lines 48–450 |
-| `main()` function | ✓ | Line 452 |
-| `main "$@"` invocation | ✓ | Line 585 |
-| `#fin` end marker | ✓ | Line 586 |
+| Description comment | ✓ | Lines 2-4 |
+| `set -euo pipefail` | ✓ | Line 5 |
+| `shopt -s inherit_errexit` | ✓ | Line 6 |
+| `VERSION` (declare -r) | ✓ | Line 9 |
+| `SCRIPT_PATH` (declare -r) | ✓ | Line 11 |
+| `SCRIPT_NAME` (declare -r) | ✓ | Line 12 |
+| `SCRIPT_DIR` (declare -r) | ✗ Missing | Not required for this script |
+| Global declarations | ✓ | Lines 14-26 |
+| Color definitions | ✓ | Lines 29-33 |
+| Utility functions | ✓ | Lines 37-51 |
+| Business logic functions | ✓ | Lines 54-452 |
+| `main()` function | ✓ | Line 454 |
+| `main "$@"` invocation | ✓ | Line 586 |
+| `#fin` end marker | ✓ | Line 587 |
 
 ### BCS Forbidden Patterns — All Clear
 
 | Pattern | Found |
 |---------|-------|
-| Backticks | ✗ None |
-| `(( i++ ))` / `(( ++i ))` | ✗ None |
-| `function` keyword | ✗ None |
-| `[ ]` test brackets | ✗ None |
-| `eval` | ✗ None |
-| `expr` | ✗ None |
-| Tab indentation | ✗ None |
+| Backticks | None |
+| `(( i++ ))` / `(( ++i ))` | None |
+| `function` keyword | None |
+| `[ ]` test brackets | None |
+| `eval` | None |
+| `expr` | None |
+| Tab indentation | None |
 
 ---
 
 ## Findings
 
-### CRITICAL-01: Double-Shift Bug in Argument Parsing
+### HIGH-01: BCS0107 — Function Organization (Bottom-Up Order)
 
-**Severity**: Critical
-**Location**: `auto-reboot:491` and `auto-reboot:503`
-**BCS Code**: BCS0601
+**Severity**: High
+**Location**: `auto-reboot:361-452`
 
-The `--reboot-time` and `--allowed-days` cases each contain an extra `shift` inside the case block. The main `while` loop already performs `shift` at line 535 after `esac`. This causes the next argument to be silently consumed.
+Two functions violate BCS0107 bottom-up ordering:
 
-**Affected options:**
+1. **`usage()`** (Layer 2 — Documentation) is defined after all business logic functions (Layer 5), including `schedule_reboot()`, `list_schedules()`, `delete_schedule()`, and `install_auto_reboot()`.
 
-`--reboot-time` (line 484–497):
-```bash
--r|--reboot-time)
-  noarg "$@"; shift        # shift 1: flag → value
-  ...
-      MACHINE_REBOOT_TIME=$1
-      shift                # shift 2: value → next arg  ← BUG
-  ...
-  fi ;;
-# Line 535: shift          # shift 3: eats next argument!
-```
+2. **`systemd_run_required()`** (Layer 4 — Validation) is defined after `schedule_reboot()` (Layer 5) which calls it.
 
-`--allowed-days` (line 498–503):
-```bash
--a|--allowed-days)
-  noarg "$@"; shift        # shift 1: flag → value
-  ...
-  shift ;;                 # shift 2: value → next arg  ← BUG
-# Line 535: shift          # shift 3: eats next argument!
-```
+BCS0107 mandates: Messaging -> Documentation -> Helpers -> Validation -> Business Logic -> Orchestration -> `main()`.
 
-**Compare with correct pattern** (`--max-uptime-days`, line 477–483):
-```bash
--m|--max-uptime-days)
-  noarg "$@"; shift        # shift 1: flag → value
-  ...
-  MACHINE_UPTIME_MAXDAYS=$1
-  # No inner shift         # ← Correct
-  fi ;;
-# Line 535: shift          # shift 2: value → next arg ✓
-```
+**Impact**: Reduces readability and maintainability. In Bash, function ordering doesn't affect execution (functions are defined before `main()` runs), but bottom-up ordering ensures readers encounter dependencies before dependents.
 
-**Impact**: Running `auto-reboot --reboot-time 04:00 --allowed-days Sun -N` will silently drop `--allowed-days` (consumed by the extra shift in `--reboot-time`). Then `Sun` becomes an unknown option, causing an error.
-
-**Fix**: Remove the extra `shift` on lines 491 and 503:
-
-```bash
-# Line 491: Remove this shift
-            MACHINE_REBOOT_TIME=$1
--           shift
-
-# Line 503: Remove this shift
-        fi
--       shift ;;
-+       ;;
-```
+**Fix**: Move `usage()` to immediately after `die()`/`noarg()`. Move `systemd_run_required()` to after `is_reboot_day_allowed()` and before `check_reboot_conditions()`.
 
 ---
 
-### HIGH-01: SC2015 — `A && B || C` Anti-Pattern (3 instances)
+### HIGH-02: SC2015 — `A && B || C` Anti-Pattern
 
 **Severity**: High
-**Location**: `auto-reboot:94`, `auto-reboot:351`, `auto-reboot:352`
-**BCS Code**: BCS0801
+**Location**: `auto-reboot:100`
+**BCS Code**: BCS0505
 
-BCS requires explicit `if/then` instead of `&& ... ||` chains because `C` can run even when `A` is true (if `B` fails).
-
-**Line 94** — `is_reboot_day_allowed()`:
 ```bash
-# Current:
 (( current_day == allowed_day )) && return 0 ||:
+```
 
-# Fix:
+ShellCheck flags this as not being a true if-then-else. While `return 0` cannot fail (making the `||:` technically unreachable in this case), the pattern is prohibited by BCS as it creates a maintenance risk — future changes to the `B` position could silently fall through.
+
+**Fix**:
+```bash
 if (( current_day == allowed_day )); then return 0; fi
 ```
 
-**Lines 351–352** — `install_auto_reboot()`:
-```bash
-# Current:
-[[ -L $localbin ]] && rm "$localbin" ||:
-[[ -f $localbin ]] && rm "$localbin" ||:
+---
 
-# Fix:
-if [[ -L $localbin ]]; then rm "$localbin"; fi
-if [[ -f $localbin ]]; then rm "$localbin"; fi
+### MEDIUM-01: BCS0701 — Missing Message Control Flags
+
+**Severity**: Medium
+**Location**: Global declarations block (line 22)
+
+BCS0701 requires `VERBOSE` and `DEBUG` flags:
+```bash
+declare -i VERBOSE=1 DEBUG=0
 ```
 
-**Impact**: If `rm` fails on line 351/352, the `||:` silently swallows the error. With `set -e`, this could mask a permissions issue.
+Currently `info()` outputs unconditionally. BCS0703 requires `info()` to respect the `VERBOSE` flag.
+
+**Fix**: Add to global declarations and guard `info()`:
+```bash
+declare -i VERBOSE=1 DEBUG=0
+info() { ((VERBOSE)) || return 0; >&2 _msg "$@"; }
+```
+
+**Impact**: Low practical impact — the script currently has no quiet/verbose mode. However, this would be needed if `-q`/`--quiet` support is ever added.
 
 ---
 
-### MEDIUM-01: Missing `SCRIPT_DIR` Metadata
+### MEDIUM-02: BCS0703 — Wrong Message Function for Error Condition
 
 **Severity**: Medium
-**Location**: `auto-reboot:7–10`
-**BCS Code**: BCS0101
+**Location**: `auto-reboot:330-332`
 
-BCS requires `SCRIPT_DIR` among script metadata variables. Not all scripts need it, but `install_auto_reboot()` creates a symlink to `$SCRIPT_PATH`, making the directory relevant.
-
-**Fix**: Add after line 10:
 ```bash
-declare -r SCRIPT_DIR=${SCRIPT_PATH%/*}
+sudo apt-get update --quiet --assume-yes || {
+  info 'apt-get update failed'   # <-- should be error()
+  return 1
+}
 ```
 
----
+A failure path must use `error()`, not `info()`. Using `info` here would suppress the message if `VERBOSE` gating is ever implemented.
 
-### MEDIUM-02: Raw Exit Codes Instead of Named Constants
-
-**Severity**: Medium
-**Location**: `auto-reboot:43`, `auto-reboot:45`, `auto-reboot:459`
-**BCS Code**: BCS0602
-
-The script uses raw numeric exit codes (1, 22) without defining BCS canonical constants.
-
-| Line | Code | Should Be |
-|------|------|-----------|
-| 43   | `exit "${1:-0}"` | Generic (OK for die) |
-| 45   | `die 22` | `ERR_INVAL` |
-| 459  | `die 1` | `ERR_GENERAL` |
-
-**Fix**: Define used constants after metadata:
+**Fix**:
 ```bash
-declare -ri ERR_GENERAL=1
-declare -ri ERR_INVAL=22
+sudo apt-get update --quiet --assume-yes || {
+  error 'apt-get update failed'
+  return 1
+}
 ```
 
 ---
 
-### MEDIUM-03: File-Scoped SC2155 Suppression
+### MEDIUM-03: BCS0711 — Verbose Combined Redirection (4 instances)
 
 **Severity**: Medium
-**Location**: `auto-reboot:8`
-**BCS Code**: BCS1302
+**Location**: `auto-reboot:197`, `auto-reboot:328`, `auto-reboot:339`, `auto-reboot:439`
 
-The `#shellcheck disable=SC2155` on line 8 is at file scope, suppressing the warning for the entire script. It should be scoped to line 9 only.
+BCS0711 requires `&>/dev/null` instead of `>/dev/null 2>&1`:
 
-Currently no other SC2155 violations exist (all other declarations use separate `local`/`declare` and assignment), but the broad scope could mask future regressions.
+| Line | Current | Required |
+|------|---------|----------|
+| 197  | `systemctl is-system-running >/dev/null 2>&1` | `&>/dev/null` |
+| 328  | `command -v systemd-run >/dev/null 2>&1` | `&>/dev/null` |
+| 339  | `command -v systemd-run >/dev/null 2>&1` | `&>/dev/null` |
+| 439  | `command -v systemd-run >/dev/null 2>&1` | `&>/dev/null` |
 
-**Fix**: Move the directive directly above the affected line and below the description comment:
-```bash
-# Intelligent system reboot scheduler with flexible timing and day-of-week restrictions
-set -euo pipefail
-shopt -s inherit_errexit
-
-# Script metadata
-declare -r VERSION=1.1.1
-#shellcheck disable=SC2155 # realpath return checked by set -e
-declare -r SCRIPT_PATH=$(realpath -- "$0")
-```
-
-Actually, the current placement (line 8) is already directly above line 9. ShellCheck applies inline directives to the next command only when placed immediately above it. **Verdict**: Current placement is correct; this is a non-issue on review. The directive applies only to line 9.
-
-**Status**: Withdrawn — no change needed.
+Note: `2>/dev/null` (stderr-only suppression) used elsewhere is correct and unaffected.
 
 ---
 
-### MEDIUM-04: Line Length Violations (5 lines > 100 chars)
+### MEDIUM-04: BCS0901 — Unquoted Variables in File Tests (2 instances)
 
 **Severity**: Medium
-**BCS Code**: BCS1301
+**Location**: `auto-reboot:347-348`
 
-| Line | Chars | Content |
-|------|-------|---------|
-| 203  | 110   | `logger` scheduling message |
-| 210  | 111   | `logger` success message |
-| 231  | 113   | `systemctl list-timers` pipeline |
-| 298  | 103   | `systemctl list-timers` pipeline |
-| 555  | 102   | uptime reason echo |
-
-**Fix**: Break with `\` continuation or use intermediate variables:
 ```bash
-# Line 203:
-logger -t "$SCRIPT_NAME" \
-  "Scheduling system reboot in ${delay}s for user $XUSER (uptime: ${UPTIME_DAYS}d)"
+[[ ! -L $localbin ]] || rm "$localbin"   # unquoted in test
+[[ ! -f $localbin ]] || rm "$localbin"   # unquoted in test
+```
+
+BCS0901 states: "Always quote variables in file tests."
+
+**Fix**:
+```bash
+[[ ! -L "$localbin" ]] || rm "$localbin"
+[[ ! -f "$localbin" ]] || rm "$localbin"
 ```
 
 ---
 
-### MEDIUM-05: Install Permissions (chmod 770)
+### MEDIUM-05: BCS1201 — Inconsistent Indentation
 
 **Severity**: Medium
-**Location**: `auto-reboot:356–358`
+**Location**: `auto-reboot:199-201`
 
-The installed script and symlink use `chmod 770`, which denies world-read/execute. For `/usr/local/bin` executables this is unusual — typically `755` is expected so all users can invoke the script.
+```bash
+  if (( sys_rc > 1 )); then
+      error 'systemd is not running...'    # 6-space indent (4 relative)
+      return 1                             # 6-space indent
+  fi
+```
 
-The `chown "$XUSER":sudo` restricts ownership to the `sudo` group, which is intentional for privilege control. However, the original script (`SCRIPT_PATH`) also gets `770`, meaning non-sudo-group users cannot read it.
+All other `if` blocks use 2-space relative indentation. BCS1201 mandates 2 spaces throughout.
 
-**Recommendation**: Consider `750` (group-readable/executable but not writable) or document the 770 choice.
+**Fix**:
+```bash
+  if (( sys_rc > 1 )); then
+    error 'systemd is not running. This script requires systemd for reliable scheduling.'
+    return 1
+  fi
+```
 
 ---
 
 ### MEDIUM-06: `readonly --` Convention
 
 **Severity**: Medium
-**Location**: `auto-reboot:538–540`
-**BCS Code**: BCS0203
+**Location**: `auto-reboot:541-543`
+**BCS Code**: BCS0205
 
-BCS recommends `readonly --` with double-dash for safety. Current code:
+BCS recommends `readonly --` with double-dash for safety:
+
 ```bash
+# Current:
 readonly MACHINE_REBOOT_TIME MACHINE_UPTIME_MAXDAYS
 readonly DRY_RUN FORCE_REBOOT
-readonly -a ALLOWED_DAYS
-```
 
-**Fix**:
-```bash
+# Fix:
 readonly -- MACHINE_REBOOT_TIME MACHINE_UPTIME_MAXDAYS
 readonly -- DRY_RUN FORCE_REBOOT
-readonly -a ALLOWED_DAYS
 ```
 
 ---
 
-### LOW-01: Missing Optional Utility Functions
+### LOW-01: `run_tests.sh` — Unused Variable
 
 **Severity**: Low
-**Location**: Global scope
-**BCS Code**: BCS0901
+**Location**: `run_tests.sh:16-18`
 
-BCS recommends a standard set of utility functions. The script defines `_msg`, `info`, `error`, `die`, and `noarg`. Missing (not required):
-- `warn()` — warning messages
-- `vecho()` — verbose output
-- `debug()` — debug messages
-- `yn()` — yes/no prompts
+`GREEN` is declared in the color block but never referenced. `CYAN` (line 21) and `RED` (line 55) are used; `GREEN` is dead code.
 
-The script uses inline `read -p` for confirmation (line 314) instead of `yn()`. This is acceptable for a single use case.
+**Fix**: Remove `GREEN` from the declaration:
+```bash
+declare -r RED=$'\033[0;31m' CYAN=$'\033[0;36m' NC=$'\033[0m'
+```
 
 ---
 
-### LOW-02: `info()` Writes to stderr
+### LOW-02: `.bash_completion` — ShellCheck Compliance
 
 **Severity**: Low
-**Location**: `auto-reboot:42`
+**Location**: `.bash_completion:1,14,19,29,31,42,43,52`
 
-Both `error()` and `info()` write to stderr. While this is valid (keeps stdout clean for data), it differs from common convention where info goes to stdout. The approach is consistent and intentional.
+9 ShellCheck findings including missing shell directive, `COMPREPLY` assignment pattern, and declare+assign. The SC2207 warnings about `COMPREPLY=( $(compgen ...) )` are the standard bash-completion pattern; suppress with a file-level directive:
 
-**Impact**: None — informational only.
+```bash
+# shellcheck shell=bash
+# shellcheck disable=SC2207
+```
+
+The SC2001 on line 42 (`sed 's/auto-reboot-//'`) can use parameter expansion:
+```bash
+local timer_ids="${timers//auto-reboot-/}"
+```
 
 ---
 
-### LOW-03: Undocumented `exit` vs `return` Pattern
+### LOW-03: BCS0801 — Missing `--` End-of-Options
 
 **Severity**: Low
-**Location**: `auto-reboot:506–519`
+**Location**: `auto-reboot:467-538`
 
-Some case branches use `exit $?` while others use `return`. The pattern is intentional:
-- `exit $?` for standalone operations (`--install`, `--list`, `--delete`, `--delete-all`, `--version`)
-- `return` for argument parsing errors
+The argument parsing loop does not handle `--` to terminate option processing:
 
-This is correct but could benefit from a comment explaining the convention.
+```bash
+--) shift; break ;;
+```
+
+Low risk since the script accepts no positional file-path arguments.
+
+---
+
+### LOW-04: BCS Suggestions (3 from bcscheck)
+
+**Severity**: Low
+
+1. **BCS0706 — Incomplete Color Set**: Only `RED`, `CYAN`, `NC` defined. `GREEN` and `YELLOW` are absent because no `warn()`/`success()` functions exist. Current set is defensible given the script's needs.
+
+2. **BCS0606 — Verbose flag-setting conditionals**: `check_reboot_conditions()` uses 3 `if` blocks to set `REBOOT_NEEDED=1`. BCS prefers inverted `||` form:
+   ```bash
+   [[ ! -f /var/run/reboot-required ]] || REBOOT_NEEDED=1
+   ((UPTIME_DAYS < MACHINE_UPTIME_MAXDAYS)) || REBOOT_NEEDED=1
+   ((!FORCE_REBOOT)) || REBOOT_NEEDED=1
+   ```
+
+3. **BCS0801 — `--` end-of-options**: See LOW-03 above.
 
 ---
 
@@ -355,13 +364,44 @@ This is correct but could benefit from a comment explaining the convention.
 | Check | Status | Notes |
 |-------|--------|-------|
 | Command injection | ✓ Safe | No `eval`, no unvalidated input in commands |
-| PATH locking | ✓ Good | `declare -rx PATH=...` on line 12 |
-| SUID/SGID | ✓ None | No setuid/setgid |
-| Input validation | ✓ Good | Time, day, and numeric inputs validated |
-| Privilege escalation | ✓ Controlled | Sudo elevation with group check |
-| Unsafe rm | ▲ See HIGH-01 | `rm` in `||:` chain masks failure |
-| Symlink safety | ✓ Reasonable | `realpath` used for SCRIPT_PATH |
-| Unquoted variables | ✓ Clean | All variables properly quoted |
+| PATH locking | ✓ Good | `declare -rx PATH=...` on line 15 |
+| SUID/SGID | ✓ None | No setuid/setgid permissions |
+| Input validation | ✓ Good | Time (HH:MM range), day (enum), uptime (positive int) all validated |
+| Privilege escalation | ✓ Controlled | Sudo elevation gated by group membership check |
+| Unsafe rm | ✓ Safe | `rm` only on validated `$localbin` path in `install_auto_reboot()` |
+| Symlink safety | ✓ Good | `realpath` resolves `$0` before use |
+| Unquoted variables | ▲ Minor | 2 unquoted in `[[ ]]` file tests (safe in `[[ ]]` but violates BCS) |
+| Audit trail | ✓ Good | All schedule/delete ops logged via `logger -t` with user identity |
+| Non-interactive safety | ✓ Good | `delete_all_schedules` checks `[[ -t 0 ]]` before prompting |
+
+---
+
+## Test Suite Analysis
+
+**Results**: 127/127 tests passing
+
+| Suite | Tests | Coverage |
+|-------|-------|----------|
+| `utility.bats` | 21 | `_msg`, `error`, `info`, `die`, `noarg`, `usage`, `systemd_run_required` |
+| `parse_days.bats` | 35 | `parse_day` (all formats), `parse_allowed_days`, `is_reboot_day_allowed` |
+| `reboot_delay.bats` | 10 | `calculate_reboot_delay` with/without day restrictions, wrap-around |
+| `conditions.bats` | 8 | `check_reboot_conditions` with uptime, force, combined |
+| `schedule.bats` | 18 | `schedule_reboot`, `list_schedules`, `delete_schedule`, `delete_all_schedules` |
+| `cli.bats` | 35 | Argument parsing, bundled options, error handling |
+
+**Test Infrastructure Quality**: High
+
+- `source_script()` / `run_script()` properly sanitize test-incompatible constructs
+- Comprehensive mock infrastructure (date, systemctl, systemd-run, logger, uptime, sudo, id)
+- Mock date handles time arithmetic with proper epoch calculations
+- Custom assertions supplement bats-assert library
+- Tests properly isolated with temp dirs and teardown cleanup
+
+**Coverage Gaps** (minor):
+
+- `install_auto_reboot()` not tested (requires root/apt interaction)
+- `delete_all_schedules()` with actual timers + confirmation flow not tested (requires interactive terminal)
+- `MACHINE_REBOOT_TIME` / `MACHINE_UPTIME_MAXDAYS` environment variable override paths not explicitly tested
 
 ---
 
@@ -369,48 +409,67 @@ This is correct but could benefit from a comment explaining the convention.
 
 | Metric | Value |
 |--------|-------|
-| Total lines | 586 |
+| Total project lines | 2055 |
+| Main script lines | 587 |
+| Test lines | 1410 (68.6% of project) |
 | Functions | 15 |
-| Scripts audited | 1 (auto-reboot) + 1 (bash_completion) |
-| ShellCheck findings | 3 (SC2015 info) |
-| BCS forbidden patterns | 0 |
+| Test cases | 127 |
+| Scripts audited | 3 (`auto-reboot`, `run_tests.sh`, `.bash_completion`) |
+| ShellCheck findings | 1 (auto-reboot) + 2 (run_tests.sh) + 9 (.bash_completion) |
+| BCS violations | 6 rules (11 instances) |
+| BCS compliance | 76% |
 | Security issues | 0 critical |
+| Test pass rate | 100% |
 
 ---
 
 ## Tool Output Summary
 
 ### ShellCheck
+
 ```
-3 × SC2015 (info) — A && B || C pattern
-1 × SC2155 suppression (documented, correctly scoped)
+auto-reboot:     1 finding  (SC2015 info)
+run_tests.sh:    2 findings (SC2155 warning, SC2034 warning)
+.bash_completion: 9 findings (SC2148 error, 6x SC2207 warning, SC2155 warning, SC2001 style)
 ```
 
 ### bcscheck
+
 ```
-Completed without violations.
+Compliance: 76% — NEEDS_WORK
+Violations: 6 rules (BCS0107, BCS0701, BCS0703, BCS0711, BCS0901, BCS1201)
+Suggestions: 3 (BCS0706, BCS0606, BCS0801)
+```
+
+### Test Suite
+
+```
+127/127 passing (100%)
 ```
 
 ---
 
 ## Actionable Recommendations
 
-### Immediate (Critical/High)
+### Immediate (High)
 
-1. **Remove extra `shift`** on line 491 (inside `--reboot-time`) and line 503 (inside `--allowed-days`)
-2. **Replace `&& ... ||:`** with explicit `if/then` on lines 94, 351, 352
+1. **Reorder functions** to BCS0107 bottom-up layering: move `usage()` after messaging functions, move `systemd_run_required()` before business logic
+2. **Replace `&&...||:`** with `if/then` on line 100
 
 ### Short-term (Medium)
 
-3. Add `SCRIPT_DIR` metadata variable
-4. Define `ERR_GENERAL=1` and `ERR_INVAL=22` constants
-5. Break lines > 100 characters with `\` continuation
-6. Add `--` to `readonly` declarations
-7. Review `chmod 770` for `/usr/local/bin` installation
+3. **Replace `>/dev/null 2>&1`** with `&>/dev/null` (4 instances)
+4. **Quote variables** in file tests: lines 347-348
+5. **Fix indentation** in `schedule_reboot()`: lines 199-201
+6. **Change `info` to `error`** in `install_auto_reboot()` failure path: line 331
+7. **Add `readonly --`** double-dash to freeze declarations: lines 541-542
+8. **Add `VERBOSE`/`DEBUG` flags** if quiet mode is desired
 
 ### Optional (Low)
 
-8. Add `warn()` utility function if warning messages are needed in future
-9. Document `exit` vs `return` convention in argument parsing
+9. Fix `run_tests.sh` unused `GREEN` variable
+10. Add ShellCheck directives to `.bash_completion`
+11. Add `--` end-of-options case in parse loop
+12. Consider BCS0606 inverted `||` form for flag-setting conditionals
 
 #fin
