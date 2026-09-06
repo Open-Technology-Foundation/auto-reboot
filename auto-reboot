@@ -300,7 +300,9 @@ schedule_reboot() {
   if (( ! DRY_RUN )); then
     logger -t "$SCRIPT_NAME" "Scheduling system reboot in ${delay}s for user $XUSER (uptime: ${UPTIME_DAYS}d)"
 
-    if systemd-run --on-active="${delay}s" --timer-property=AccuracySec=1s \
+    # --quiet: without it systemd-run prints "Running timer as unit" to
+    # stderr, which cron mails every night in the week before a reboot.
+    if systemd-run --quiet --on-active="${delay}s" --timer-property=AccuracySec=1s \
       --unit="${SCRIPT_NAME}-$(date +%s)" \
       --description="Scheduled reboot by $SCRIPT_NAME" \
       bash -c "$reboot_cmd"; then
