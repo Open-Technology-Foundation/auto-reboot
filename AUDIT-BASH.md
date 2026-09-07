@@ -50,7 +50,7 @@ All findings below were addressed in the working tree after this audit was writt
 | LOW-08 | `tests/test_helper.bash` | ✓ Fixed | rewritten; bats libs `\|\|:`, exports minimal, plain section comments, named heredoc delimiters, `$(<)` |
 | LOW-09 | Makefile `$(srcdir)` | ✓ Fixed | anchored sources; `test` target shellchecks all four files |
 | LOW-10 | `.gitignore` ignores itself | ✓ Fixed | self-ignore lines removed; file is now untracked-but-trackable (`??`) |
-| LOW-11 | Positional `list-timers` parsing | ✓ Fixed | `systemctl show -p NextElapseUSecRealtime --value` |
+| LOW-11 | Positional `list-timers` parsing | ✓ Fixed (1.3.1) | 1.3.0 used `systemctl show -p NextElapseUSecRealtime`, which is empty for monotonic `--on-active` timers (found on okusi0-batam the next morning); 1.3.1 reads the NEXT column of `list-timers` scoped to the unit, under `LC_ALL=C`, with an `unknown` fallback |
 | LOW-12 | `id -nG ""` | ✓ Fixed | `id -nG` |
 | LOW-13 | `--on-active` monotonic timer | ▲ Left as is | informational; no DST on the fleet's zones; documented in CLAUDE.md as a known trade-off |
 | LOW-14 | `sudo` inside install | ✓ Fixed | removed with the apt branch |

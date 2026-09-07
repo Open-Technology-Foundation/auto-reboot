@@ -9,7 +9,7 @@ shopt -s inherit_errexit
 declare -rx PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 
 # Script metadata
-declare -r VERSION=1.3.0
+declare -r VERSION=1.3.1
 #shellcheck disable=SC2155 # BCS0103 metadata pattern; a failed realpath here is not recoverable
 declare -r SCRIPT_PATH=$(realpath -- "$0")
 declare -r SCRIPT_NAME=${SCRIPT_PATH##*/}
@@ -358,7 +358,11 @@ list_schedules() {
 
   for timer in "${timers[@]}"; do
     count+=1
-    next=$(systemctl show -p NextElapseUSecRealtime --value "$timer" 2>/dev/null ||:)
+    # --on-active timers are monotonic, so `systemctl show` has no realtime
+    # value; only list-timers computes NEXT (its first four fields:
+    # weekday date time zone). LC_ALL=C keeps that layout stable.
+    next=$(LC_ALL=C systemctl list-timers --all --no-pager --no-legend "$timer" 2>/dev/null \
+      | awk -v t="$timer" '$0 ~ t && $2 ~ /^[0-9][0-9][0-9][0-9]-/ {print $1, $2, $3, $4; exit}' ||:)
     echo "$count. $timer - Scheduled: ${next:-unknown}"
   done
   echo '============================='

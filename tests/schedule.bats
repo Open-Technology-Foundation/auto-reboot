@@ -244,12 +244,23 @@ Fri 2024-11-15 04:00:00 UTC  auto-reboot-1700028000.timer  auto-reboot-170002800
 
 # ── list_schedules next-elapse source ────────────────────────────
 
-@test "list_schedules: scheduled time comes from systemctl show" {
-  local -- timer_line="Thu 2024-11-14 22:00:00 UTC  auto-reboot-1700006400.timer  auto-reboot-1700006400.service"
-  create_mock_systemctl "$timer_line" 0 'Sat 2099-01-01 00:00:00 UTC'
+@test "list_schedules: scheduled time is the list-timers NEXT column" {
+  # --on-active timers are monotonic: `systemctl show` has no realtime value,
+  # only list-timers computes the wall-clock NEXT (first four fields)
+  local -- timer_line="Thu 2024-11-14 22:00:00 UTC  4 days left  n/a  n/a  auto-reboot-1700006400.timer  auto-reboot-1700006400.service"
+  create_mock_systemctl "$timer_line"
   run list_schedules
   [[ "$status" -eq 0 ]]
-  assert_output_contains "Scheduled: Sat 2099-01-01 00:00:00 UTC"
+  assert_output_contains "Scheduled: Thu 2024-11-14 22:00:00 UTC"
+  assert_output_not_contains "unknown"
+}
+
+@test "list_schedules: reports unknown when NEXT cannot be read" {
+  local -- timer_line="auto-reboot-1700006400.timer"
+  create_mock_systemctl "$timer_line"
+  run list_schedules
+  [[ "$status" -eq 0 ]]
+  assert_output_contains "auto-reboot-1700006400.timer - Scheduled: unknown"
 }
 
 #fin

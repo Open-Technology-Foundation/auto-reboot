@@ -40,21 +40,19 @@ MOCK
   chmod +x "$MOCK_BIN"/logger
 }
 
-# create_mock_systemctl [TIMER_LINES] [STOP_RC] [SHOW_OUTPUT]
-#   TIMER_LINES  printed by `systemctl list-timers` (default: none)
+# create_mock_systemctl [TIMER_LINES] [STOP_RC]
+#   TIMER_LINES  printed by `systemctl list-timers` whatever the unit argument
+#                (default: none); real lines read NEXT LEFT LAST PASSED UNIT ACTIVATES
 #   STOP_RC      exit status of `systemctl stop` (default: 0)
-#   SHOW_OUTPUT  printed by `systemctl show` (default: a fixed timestamp)
 create_mock_systemctl() {
   local -- timer_output=${1:-}
   local -i stop_rc=${2:-0}
-  local -- show_output=${3:-Thu 2024-11-14 22:00:00 UTC}
   cat > "$MOCK_BIN"/systemctl <<MOCK
 #!/usr/bin/env bash
 echo "systemctl \$*" >> "\${MOCK_LOG:-/dev/null}"
 case \$1 in
   is-system-running) echo running; exit 0 ;;
   list-timers) printf '%s\n' "${timer_output}" ;;
-  show) echo "${show_output}" ;;
   stop) exit ${stop_rc} ;;
   *) exit 0 ;;
 esac
@@ -198,7 +196,7 @@ _common_teardown() {
   export PATH=$ORIG_PATH
 }
 
-# Sanitised copy of the script
+# Sanitised script copy
 
 # _sanitize_script — writes a copy of auto-reboot with four whole-line edits:
 #   1. declare -rx PATH=...       removed (mock binaries must win PATH lookup)
@@ -278,17 +276,6 @@ assert_output_not_contains() {
   if [[ $haystack == *"$substring"* ]]; then
     >&2 echo "Expected output NOT to contain: $substring"
     >&2 echo "Actual output: $haystack"
-    return 1
-  fi
-}
-
-assert_line_contains() {
-  local -i line_num=$1
-  local -- substring=$2
-  # shellcheck disable=SC2154 # lines is set by the BATS `run` helper
-  if [[ ${lines[$line_num]} != *"$substring"* ]]; then
-    >&2 echo "Expected line $line_num to contain: $substring"
-    >&2 echo "Actual line: ${lines[$line_num]}"
     return 1
   fi
 }

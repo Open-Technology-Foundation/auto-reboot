@@ -2,7 +2,7 @@
 
 Conditional system reboot scheduler with flexible timing and day-of-week restrictions.
 
-**Version:** 1.3.0
+**Version:** 1.3.1
 **License:** GPL-3.0
 
 ## Overview
