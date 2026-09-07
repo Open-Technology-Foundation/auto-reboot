@@ -148,8 +148,74 @@ teardown() {
 @test "systemd_run_required fails when systemd-run missing" {
   # Remove systemd-run from PATH by using a restricted PATH
   run bash -c 'export PATH="'"${TEST_TEMP_DIR}/empty-bin"'"; source "'"${TEST_TEMP_DIR}/auto-reboot-sanitized"'"; systemd_run_required 2>&1'
-  [[ "$status" -ne 0 ]]
+  [[ "$status" -eq 18 ]]
   assert_output_contains "systemd-run"
+}
+
+# ── validators ───────────────────────────────────────────────────
+
+@test "validate_time: accepts leading-zero hour and minute" {
+  validate_time 08:09
+}
+
+@test "validate_time: rejects hour 24 and minute 60" {
+  ! validate_time 24:00
+  ! validate_time 12:60
+}
+
+@test "validate_time: rejects non-time text" {
+  ! validate_time noon
+  ! validate_time 22
+}
+
+@test "validate_days: accepts positive integers including leading zero" {
+  validate_days 14
+  validate_days 08
+}
+
+@test "validate_days: rejects zero, negative and text" {
+  ! validate_days 0
+  ! validate_days -3
+  ! validate_days abc
+}
+
+# ── elevate_to_root ──────────────────────────────────────────────
+
+@test "elevate_to_root: forwards time and days through sudo" {
+  ((EUID)) || skip 'running as root'
+  create_mock_sudo
+  create_mock_id sudo
+  # Fresh shell: source_script() replaces elevate_to_root with a no-op
+  run env MACHINE_REBOOT_TIME=04:20 MACHINE_UPTIME_MAXDAYS=7 \
+    bash -c 'source "$1"; elevate_to_root --allowed-days Sun' \
+    "$SCRIPT_UNDER_TEST" "$TEST_TEMP_DIR/auto-reboot-sanitized"
+  [[ "$status" -eq 0 ]]
+  assert_mock_called "sudo -- .*auto-reboot -r 04:20 -m 7 --allowed-days Sun"
+}
+
+@test "elevate_to_root: dies 13 when not in sudo group" {
+  ((EUID)) || skip 'running as root'
+  create_mock_sudo
+  create_mock_id users
+  run bash -c 'source "$1"; elevate_to_root' "$SCRIPT_UNDER_TEST" "$TEST_TEMP_DIR/auto-reboot-sanitized"
+  [[ "$status" -eq 13 ]]
+  assert_mock_not_called "sudo"
+}
+
+# ── install_auto_reboot ──────────────────────────────────────────
+
+@test "install_auto_reboot: installs a root-owned 0755 copy under PREFIX" {
+  create_mock_install
+  run install_auto_reboot
+  [[ "$status" -eq 0 ]]
+  assert_mock_called "install -m 755 -o root -g root -- .*auto-reboot $PREFIX/bin/auto-reboot"
+}
+
+@test "install_auto_reboot: never runs apt, even without systemd-run on PATH" {
+  create_mock_install
+  create_mock_sudo
+  PATH=$MOCK_BIN run install_auto_reboot
+  assert_mock_not_called "apt-get"
 }
 
 #fin

@@ -10,6 +10,7 @@ setup() {
   create_mock_uptime "2024-11-01 10:00:00"
   create_mock_sudo
   create_mock_id
+  export PATH="$MOCK_BIN:$ORIG_PATH"
 }
 
 teardown() {
@@ -36,14 +37,13 @@ teardown() {
 @test "cli: -V shows version" {
   run_script -V
   [[ "$status" -eq 0 ]]
-  assert_output_contains "auto-reboot"
-  assert_output_contains "1.2.0"
+  assert_output_contains "auto-reboot $VERSION"
 }
 
 @test "cli: --version shows version" {
   run_script --version
   [[ "$status" -eq 0 ]]
-  assert_output_contains "1.2.0"
+  assert_output_contains "$VERSION"
 }
 
 # ── Dry run flags ─────────────────────────────────────────────────
@@ -136,15 +136,15 @@ teardown() {
   assert_output_contains "requires an argument"
 }
 
-@test "cli: -m with non-numeric value fails" {
+@test "cli: -m with non-numeric value exits 22" {
   run_script -m abc
-  [[ "$status" -ne 0 ]]
+  [[ "$status" -eq 22 ]]
   assert_output_contains "positive integer"
 }
 
-@test "cli: -m 0 fails" {
+@test "cli: -m 0 exits 22" {
   run_script -m 0
-  [[ "$status" -ne 0 ]]
+  [[ "$status" -eq 22 ]]
   assert_output_contains "positive integer"
 }
 
@@ -166,21 +166,21 @@ teardown() {
   assert_output_contains "requires an argument"
 }
 
-@test "cli: -r with invalid format fails" {
+@test "cli: -r with invalid format exits 22" {
   run_script -r "noon"
-  [[ "$status" -ne 0 ]]
+  [[ "$status" -eq 22 ]]
   assert_output_contains "HH:MM"
 }
 
-@test "cli: -r 25:00 fails (out of range)" {
+@test "cli: -r 25:00 exits 22 (out of range)" {
   run_script -r 25:00
-  [[ "$status" -ne 0 ]]
+  [[ "$status" -eq 22 ]]
   assert_output_contains "valid time"
 }
 
-@test "cli: -r 12:60 fails (out of range minutes)" {
+@test "cli: -r 12:60 exits 22 (out of range minutes)" {
   run_script -r 12:60
-  [[ "$status" -ne 0 ]]
+  [[ "$status" -eq 22 ]]
   assert_output_contains "valid time"
 }
 
@@ -202,9 +202,9 @@ teardown() {
   assert_output_contains "requires an argument"
 }
 
-@test "cli: -a with invalid day fails" {
+@test "cli: -a with invalid day exits 22" {
   run_script -a "Funday"
-  [[ "$status" -ne 0 ]]
+  [[ "$status" -eq 22 ]]
   assert_output_contains "Invalid day"
 }
 
@@ -244,18 +244,18 @@ teardown() {
   assert_output_contains "No auto-reboot schedules"
 }
 
-# ── Unknown option ────────────────────────────────────────────────
+# ── Invalid option ────────────────────────────────────────────────
 
-@test "cli: unknown option fails" {
+@test "cli: unknown option exits 22" {
   run_script --nonexistent
-  [[ "$status" -ne 0 ]]
-  assert_output_contains "Unknown option"
+  [[ "$status" -eq 22 ]]
+  assert_output_contains "Invalid option"
 }
 
-@test "cli: unknown short option fails" {
+@test "cli: unknown short option exits 22" {
   run_script -z
-  [[ "$status" -ne 0 ]]
-  assert_output_contains "Unknown option"
+  [[ "$status" -eq 22 ]]
+  assert_output_contains "Invalid option"
 }
 
 # ── Bundled short options ─────────────────────────────────────────
@@ -277,6 +277,151 @@ teardown() {
   run_script --force-reboot --reboot-time 03:00 --max-uptime-days 7
   [[ "$status" -eq 0 ]]
   assert_output_contains "Reboot required"
+}
+
+# ── Leading-zero times (octal regression) ────────────────────────
+
+@test "cli: -r 08:00 is accepted" {
+  run_script -f -r 08:00
+  [[ "$status" -eq 0 ]]
+  assert_output_contains "Delay:"
+}
+
+@test "cli: -r 09:30 is accepted" {
+  run_script -f -r 09:30
+  [[ "$status" -eq 0 ]]
+  assert_output_contains "Delay:"
+}
+
+@test "cli: -r 22:08 is accepted" {
+  run_script -f -r 22:08
+  [[ "$status" -eq 0 ]]
+  assert_output_contains "Delay:"
+}
+
+@test "cli: -m 08 is accepted as 8" {
+  run_script -m 08 -f
+  [[ "$status" -eq 0 ]]
+}
+
+# ── Positional arguments ─────────────────────────────────────────
+
+@test "cli: bare positional argument exits 2" {
+  run_script stray
+  [[ "$status" -eq 2 ]]
+  assert_output_contains "Unexpected argument"
+}
+
+@test "cli: positional argument after -- exits 2" {
+  run_script -- stray
+  [[ "$status" -eq 2 ]]
+  assert_output_contains "Unexpected argument"
+}
+
+# ── Environment overrides ────────────────────────────────────────
+
+@test "cli: MACHINE_REBOOT_TIME=25:00 exits 22" {
+  MACHINE_REBOOT_TIME=25:00 run_script -f
+  [[ "$status" -eq 22 ]]
+  assert_output_contains "MACHINE_REBOOT_TIME"
+}
+
+@test "cli: MACHINE_REBOOT_TIME=08:00 is accepted" {
+  MACHINE_REBOOT_TIME=08:00 run_script -f
+  [[ "$status" -eq 0 ]]
+  assert_output_contains "Delay:"
+}
+
+@test "cli: MACHINE_UPTIME_MAXDAYS=0 exits 22" {
+  MACHINE_UPTIME_MAXDAYS=0 run_script
+  [[ "$status" -eq 22 ]]
+  assert_output_contains "MACHINE_UPTIME_MAXDAYS"
+}
+
+@test "cli: MACHINE_UPTIME_MAXDAYS=abc exits 22" {
+  MACHINE_UPTIME_MAXDAYS=abc run_script
+  [[ "$status" -eq 22 ]]
+  assert_output_contains "MACHINE_UPTIME_MAXDAYS"
+}
+
+@test "cli: MACHINE_UPTIME_MAXDAYS=1 triggers reboot on a 10-day uptime" {
+  create_mock_uptime "$(date -d '10 days ago' +'%Y-%m-%d %H:%M:%S')"
+  rm -f "$MOCK_BIN"/date
+  MACHINE_UPTIME_MAXDAYS=1 run_script
+  [[ "$status" -eq 0 ]]
+  assert_output_contains "Reboot required"
+}
+
+# ── Delete-all through the CLI ───────────────────────────────────
+
+@test "cli: -D with timers previews in default dry-run mode" {
+  local -- timer_line="Thu 2024-11-14 22:00:00 UTC  auto-reboot-1700006400.timer  auto-reboot-1700006400.service"
+  create_mock_systemctl "$timer_line"
+  run_script -D
+  [[ "$status" -eq 0 ]]
+  assert_output_contains "DRY RUN"
+  assert_mock_not_called "systemctl stop"
+}
+
+@test "cli: -ND without a terminal refuses" {
+  local -- timer_line="Thu 2024-11-14 22:00:00 UTC  auto-reboot-1700006400.timer  auto-reboot-1700006400.service"
+  create_mock_systemctl "$timer_line"
+  run_script -ND </dev/null
+  [[ "$status" -eq 1 ]]
+  assert_output_contains "non-interactive"
+  assert_mock_not_called "systemctl stop"
+}
+
+# ── Reboot-required file via CLI ─────────────────────────────────
+
+@test "cli: reboot-required file present is reported as reason" {
+  create_mock_reboot_required
+  run_script
+  [[ "$status" -eq 0 ]]
+  assert_output_contains "System updates require reboot"
+}
+
+@test "cli: reboot-required absent and low uptime reports not required" {
+  create_mock_uptime "$(date -d '1 hour ago' +'%Y-%m-%d %H:%M:%S')"
+  rm -f "$MOCK_BIN"/date
+  run_script
+  [[ "$status" -eq 0 ]]
+  assert_output_contains "Reboot not required"
+  assert_output_contains "Reboot-required: absent"
+}
+
+# ── Privilege elevation ──────────────────────────────────────────
+
+# These bypass run_script's no-op override: mock sudo only logs, never runs
+
+@test "cli: dry run as non-root does not elevate" {
+  ((EUID)) || skip 'running as root'
+  run bash -c 'source "$1"; main -f' "$SCRIPT_UNDER_TEST" "$(_sanitize_script)"
+  [[ "$status" -eq 0 ]]
+  assert_output_contains "Reboot required"
+  assert_mock_not_called "sudo"
+}
+
+@test "cli: --list as non-root does not elevate" {
+  ((EUID)) || skip 'running as root'
+  run bash -c 'source "$1"; main --list' "$SCRIPT_UNDER_TEST" "$(_sanitize_script)"
+  [[ "$status" -eq 0 ]]
+  assert_mock_not_called "sudo"
+}
+
+@test "cli: -N as non-root elevates with the original arguments" {
+  ((EUID)) || skip 'running as root'
+  run bash -c 'source "$1"; main -Nf -r 03:00' "$SCRIPT_UNDER_TEST" "$(_sanitize_script)"
+  [[ "$status" -eq 0 ]]
+  # Forwarded -r/-m carry the parsed values; the original arguments follow verbatim
+  assert_mock_called "sudo -- .*auto-reboot -r 03:00 -m 14 -Nf -r 03:00"
+}
+
+@test "cli: -D in dry run as non-root does not elevate" {
+  ((EUID)) || skip 'running as root'
+  run bash -c 'source "$1"; main -D' "$SCRIPT_UNDER_TEST" "$(_sanitize_script)"
+  [[ "$status" -eq 0 ]]
+  assert_mock_not_called "sudo"
 }
 
 #fin

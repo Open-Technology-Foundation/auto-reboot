@@ -176,15 +176,80 @@ Fri 2024-11-15 04:00:00 UTC  auto-reboot-1700028000.timer  auto-reboot-170002800
   assert_output_contains "No auto-reboot schedules found"
 }
 
-@test "delete_all_schedules: dry run deletes without confirmation" {
+
+@test "delete_all_schedules: dry run previews and does not stop timers" {
   local -- timer_lines
-  timer_lines="Thu 2024-11-14 22:00:00 UTC  auto-reboot-1700006400.timer  auto-reboot-1700006400.service"
+  timer_lines="Thu 2024-11-14 22:00:00 UTC  auto-reboot-1700006400.timer  auto-reboot-1700006400.service
+Fri 2024-11-15 04:00:00 UTC  auto-reboot-1700028000.timer  auto-reboot-1700028000.service"
   create_mock_systemctl "$timer_lines"
   DRY_RUN=1
-  # DRY_RUN mode still goes through delete path (no confirmation needed)
-  # But delete_schedule calls systemctl which checks for timer existence
   run delete_all_schedules
   [[ "$status" -eq 0 ]]
+  assert_output_contains "DRY RUN"
+  assert_output_contains "auto-reboot-1700006400.timer"
+  assert_output_contains "auto-reboot-1700028000.timer"
+  assert_mock_not_called "systemctl stop"
+}
+
+@test "delete_all_schedules: real run refuses without a terminal" {
+  local -- timer_line="Thu 2024-11-14 22:00:00 UTC  auto-reboot-1700006400.timer  auto-reboot-1700006400.service"
+  create_mock_systemctl "$timer_line"
+  DRY_RUN=0
+  run delete_all_schedules </dev/null
+  [[ "$status" -ne 0 ]]
+  assert_output_contains "non-interactive"
+  assert_mock_not_called "systemctl stop"
+}
+
+# ── yn ────────────────────────────────────────────────────────────
+
+@test "yn: y answers true" {
+  run yn 'Continue?' <<< 'y'
+  [[ "$status" -eq 0 ]]
+}
+
+@test "yn: n answers false" {
+  run yn 'Continue?' <<< 'n'
+  [[ "$status" -eq 1 ]]
+}
+
+# ── Existing-timer guard ─────────────────────────────────────────
+
+@test "schedule_reboot: skips when a timer already exists" {
+  local -- timer_line="Thu 2024-11-14 22:00:00 UTC  auto-reboot-1700006400.timer  auto-reboot-1700006400.service"
+  create_mock_systemctl "$timer_line"
+  DRY_RUN=0
+  run schedule_reboot 3600
+  [[ "$status" -eq 0 ]]
+  assert_output_contains "already scheduled"
+  assert_mock_not_called "systemd-run"
+}
+
+@test "schedule_reboot: unit name is epoch-based" {
+  DRY_RUN=0
+  schedule_reboot 3600
+  assert_mock_called "systemd-run .*--unit=auto-reboot-[0-9][0-9]*"
+}
+
+# ── delete_schedule failure path ─────────────────────────────────
+
+@test "delete_schedule: reports failure when systemctl stop fails" {
+  local -- timer_line="Thu 2024-11-14 22:00:00 UTC  auto-reboot-1700006400.timer  auto-reboot-1700006400.service"
+  create_mock_systemctl "$timer_line" 1
+  run delete_schedule 1700006400
+  [[ "$status" -ne 0 ]]
+  assert_output_not_contains "Successfully deleted"
+  assert_mock_not_called "logger .*Deleted scheduled reboot timer"
+}
+
+# ── list_schedules next-elapse source ────────────────────────────
+
+@test "list_schedules: scheduled time comes from systemctl show" {
+  local -- timer_line="Thu 2024-11-14 22:00:00 UTC  auto-reboot-1700006400.timer  auto-reboot-1700006400.service"
+  create_mock_systemctl "$timer_line" 0 'Sat 2099-01-01 00:00:00 UTC'
+  run list_schedules
+  [[ "$status" -eq 0 ]]
+  assert_output_contains "Scheduled: Sat 2099-01-01 00:00:00 UTC"
 }
 
 #fin

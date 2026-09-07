@@ -1,62 +1,41 @@
 #!/usr/bin/env bash
-# run_tests.sh - Test runner for auto-reboot BATS test suite
+# run_tests.sh - Test runner for the auto-reboot BATS test suite
 set -euo pipefail
+shopt -s inherit_errexit
 
-declare -r SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-declare -r TESTS_DIR="${SCRIPT_DIR}/tests"
+#shellcheck disable=SC2155 # BCS0103 metadata pattern
+declare -r SCRIPT_PATH=$(realpath -- "$0")
+declare -r SCRIPT_DIR=${SCRIPT_PATH%/*}
+declare -r TESTS_DIR="$SCRIPT_DIR"/tests
 
-# Verify bats is available
-if ! command -v bats >/dev/null 2>&1; then
-  echo "Error: bats not found. Install with: sudo apt install bats" >&2
-  exit 1
-fi
+command -v bats &>/dev/null || { >&2 echo 'bats not found. Install with: sudo apt install bats'; exit 18; }
 
-# Color support
-if [[ -t 1 ]]; then
-  declare -r GREEN=$'\033[0;32m' RED=$'\033[0;31m' CYAN=$'\033[0;36m' NC=$'\033[0m'
-else
-  declare -r GREEN='' RED='' CYAN='' NC=''
-fi
+# Suites in dependency order: low-level helpers first
+declare -ar SUITES=(utility parse_days reboot_delay conditions schedule cli)
+declare -a TEST_FILES=()
+declare -- arg suite
 
-echo "${CYAN}auto-reboot test suite${NC}"
-echo "======================"
-echo
-
-# Collect test files
-declare -a test_files=()
 if (($#)); then
-  # Run specific files or pass args through to bats
+  # Accept a path, a file name under tests/, a suite name, or a raw bats argument
   for arg in "$@"; do
-    if [[ -f "$arg" ]]; then
-      test_files+=("$arg")
-    elif [[ -f "${TESTS_DIR}/${arg}" ]]; then
-      test_files+=("${TESTS_DIR}/${arg}")
-    elif [[ -f "${TESTS_DIR}/${arg}.bats" ]]; then
-      test_files+=("${TESTS_DIR}/${arg}.bats")
+    if [[ -f $arg ]]; then
+      TEST_FILES+=("$arg")
+    elif [[ -f $TESTS_DIR/$arg ]]; then
+      TEST_FILES+=("$TESTS_DIR/$arg")
+    elif [[ -f $TESTS_DIR/$arg.bats ]]; then
+      TEST_FILES+=("$TESTS_DIR/$arg.bats")
     else
-      # Pass through as bats argument
-      test_files+=("$arg")
+      TEST_FILES+=("$arg")
     fi
   done
 else
-  # Run all test files in order
-  for f in \
-    "${TESTS_DIR}/utility.bats" \
-    "${TESTS_DIR}/parse_days.bats" \
-    "${TESTS_DIR}/reboot_delay.bats" \
-    "${TESTS_DIR}/conditions.bats" \
-    "${TESTS_DIR}/schedule.bats" \
-    "${TESTS_DIR}/cli.bats"; do
-    [[ -f "$f" ]] && test_files+=("$f")
+  for suite in "${SUITES[@]}"; do
+    [[ -f $TESTS_DIR/$suite.bats ]] && TEST_FILES+=("$TESTS_DIR/$suite.bats") ||:
   done
 fi
 
-if ((${#test_files[@]} == 0)); then
-  echo "${RED}No test files found${NC}" >&2
-  exit 1
-fi
+((${#TEST_FILES[@]})) || { >&2 echo 'No test files found'; exit 3; }
 
-echo "Running: ${test_files[*]##*/}"
-echo
-
-bats "${test_files[@]}"
+>&2 echo "auto-reboot test suite: ${TEST_FILES[*]##*/}"
+bats "${TEST_FILES[@]}"
+#fin

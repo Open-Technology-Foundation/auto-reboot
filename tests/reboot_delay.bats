@@ -136,4 +136,21 @@ teardown() {
   [[ "$output" == "129600" ]]
 }
 
+# ── Real date(1) ─────────────────────────────────────────────────
+
+@test "calculate_reboot_delay: leading-zero time works with real date" {
+  rm -f "$MOCK_BIN"/date
+  run calculate_reboot_delay "08:09"
+  [[ "$status" -eq 0 ]]
+  [[ "$output" =~ ^[0-9]+$ ]]
+  (( output > 0 && output <= 86400 ))
+}
+
+@test "calculate_reboot_delay: date failure returns error, never a negative delay" {
+  rm -f "$MOCK_BIN"/date
+  run calculate_reboot_delay "25:00"
+  [[ "$status" -ne 0 ]]
+  [[ ! $output =~ (^|[[:space:]])-[0-9]+ ]]
+}
+
 #fin

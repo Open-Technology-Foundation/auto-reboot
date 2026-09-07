@@ -229,4 +229,9 @@ teardown() {
   [[ "$status" -eq 1 ]]
 }
 
+@test "parse_day: error message has no internal function prefix" {
+  run parse_day "Funday"
+  assert_output_contains "✗ Invalid day"
+}
+
 #fin

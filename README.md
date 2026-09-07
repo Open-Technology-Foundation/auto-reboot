@@ -1,59 +1,59 @@
 # auto-reboot
 
-Intelligent system reboot scheduler with flexible timing and day-of-week restrictions.
+Conditional system reboot scheduler with flexible timing and day-of-week restrictions.
 
-**Version:** 1.2.0
+**Version:** 1.3.0
 **License:** GPL-3.0
 
 ## Overview
 
-`auto-reboot` schedules system reboots via systemd transient timers based on:
-- System update requirements (`/var/run/reboot-required`)
-- Maximum uptime threshold (default: 14 days)
-- Manual force reboot requests
+`auto-reboot` schedules a system reboot via a systemd transient timer when any of these holds:
+- System updates require a reboot (`/var/run/reboot-required` exists)
+- Uptime has reached the maximum threshold (default: 14 days)
+- A reboot is forced with `-f`
 
 Dry-run by default. Requires explicit `-N` to execute.
 
+Only one reboot is pending at a time. When an `auto-reboot` timer already exists, a new run reports it and schedules nothing, so a nightly cron entry never stacks timers.
+
 ## Requirements
 
-- Linux with systemd
+- Linux with systemd (`systemd-run` and `systemctl`, both in the `systemd` package)
 - Bash 5.2+
-- `systemd-run` (systemd-container package)
-- Root or sudo group membership
+- Root, or membership of the `sudo` group, to execute (`-N`), delete timers, or install. Dry runs and `--list` work for any user.
+
+When invoked by a `sudo` group member, the script re-executes itself through `sudo` and forwards its settings as options.
 
 ## Quick Start
 
 ```bash
-# Check if reboot needed (dry run)
+# Check whether a reboot is needed (dry run, no root required)
 auto-reboot
 
-# Schedule reboot if conditions met
+# Schedule the reboot if conditions are met
 auto-reboot -N
 
-# Force reboot at 3 AM
+# Force a reboot at 03:00
 auto-reboot -f -r 03:00 -N
 
 # List scheduled reboots
 auto-reboot -l
 
-# Delete all scheduled reboots
+# Preview, then delete all scheduled reboots
 auto-reboot -D
+auto-reboot -N -D
 ```
 
 ## Installation
 
 ```bash
-# Auto-install script and dependencies
-auto-reboot --install
-
-# Manual installation
-sudo cp auto-reboot /usr/local/bin/
-sudo chmod 770 /usr/local/bin/auto-reboot
-sudo chown $USER:sudo /usr/local/bin/auto-reboot
-
-# Bash completion (optional)
-sudo cp .bash_completion /etc/bash_completion.d/auto-reboot
+sudo make install      # script (root-owned 0755), manpage, bash completion
+sudo make uninstall
 ```
+
+`auto-reboot --install` copies only the script, root-owned, to `$PREFIX/bin` (default `/usr/local`).
+
+Root's cron runs this script. Never install it group-writable or as a symlink into a user's checkout.
 
 ## Options
 
@@ -68,13 +68,13 @@ sudo cp .bash_completion /etc/bash_completion.d/auto-reboot
 | `-r, --reboot-time HH:MM` | Scheduled reboot time (default: 22:00) |
 | `-a, --allowed-days DAYS` | Restrict to specific days (see below) |
 | `-l, --list` | List all scheduled reboots |
-| `-d, --delete TIMER` | Delete specific timer (ID or full name) |
-| `-D, --delete-all` | Delete all timers (confirms with `-N`) |
-| `-i, --install` | Install to /usr/local/bin with dependencies |
+| `-d, --delete TIMER` | Delete one timer immediately (ID or full name) |
+| `-D, --delete-all` | Dry run lists what would be deleted; `-N -D` confirms, then deletes |
+| `-i, --install` | Install a root-owned copy to `$PREFIX/bin` |
 | `-V, --version` | Show version |
 | `-h, --help` | Show help |
 
-Short options can be bundled: `-Nf` is equivalent to `-N -f`.
+Short options can be bundled: `-Nf` is equivalent to `-N -f`. Standalone operations (`-l`, `-d`, `-D`, `-i`, `-V`, `-h`) run as soon as they are parsed, so `-N` must come before `-D`.
 
 ## Day Specifications
 
@@ -87,91 +87,123 @@ The `--allowed-days` option accepts comma-separated values in any of these forma
 | Numbers | `0` (Sunday) through `6` (Saturday) |
 | Mixed | `Mon,Wed,5` |
 
+Case insensitive. Whitespace around commas is ignored.
+
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MACHINE_REBOOT_TIME` | `22:00` | Default reboot time (HH:MM) |
-| `MACHINE_UPTIME_MAXDAYS` | `14` | Default max uptime in days |
+| `MACHINE_REBOOT_TIME` | `22:00` | Default reboot time (HH:MM, 00:00 to 23:59) |
+| `MACHINE_UPTIME_MAXDAYS` | `14` | Default max uptime in days (positive integer) |
+| `PREFIX` | `/usr/local` | Installation prefix for `--install` |
 
-CLI options override environment variables.
+Both scheduling variables are validated at startup (exit 22 on a bad value) and are carried across the `sudo` re-execution. CLI options override them.
 
 ## Scheduling Logic
 
-1. **No day restrictions**: Schedules for today at the specified time, or tomorrow if that time has passed.
-2. **With day restrictions**: Finds the next allowed day within 7 days.
-3. **Force reboot**: Bypasses reboot-required and uptime checks; time/day restrictions still apply.
+1. **No day restrictions**: today at the given time, or tomorrow if that time has passed.
+2. **With day restrictions**: the next allowed day within 7 days.
+3. **Force reboot**: bypasses the reboot-required and uptime checks; time and day restrictions still apply.
+4. **One pending reboot**: an existing `auto-reboot-*.timer` is reported and left alone.
+
+Timers are transient systemd units named `auto-reboot-EPOCH.timer`, created with `systemd-run --on-active` and `AccuracySec=1s`.
+
+## Exit Status
+
+| Code | Meaning |
+|-----:|---------|
+| 0 | Success |
+| 1 | Runtime failure (systemd not running, scheduling failed, cannot prompt) |
+| 2 | Unexpected positional argument |
+| 13 | Not root and not in the `sudo` group |
+| 18 | `systemd-run` not found |
+| 22 | Invalid option, option value, or environment value |
 
 ## Examples
 
 ### Cron Integration
 
 ```bash
-# Daily check at 11 PM, reboot Sunday at 4 AM if needed
+# Nightly check, reboot Sunday 04:00 once uptime reaches 14 days
 0 23 * * * /usr/local/bin/auto-reboot -q -m 14 -r 04:00 -a Sun -N
 
-# Check every 6 hours, reboot anytime if uptime > 30 days
+# Check every 6 hours, reboot at 22:00 once uptime reaches 30 days
 0 */6 * * * /usr/local/bin/auto-reboot -q -m 30 -N
 
-# Weekly forced reboot Sunday at 3 AM
-0 2 * * 0 /usr/local/bin/auto-reboot -q -f -r 03:00 -N
+# Weekly forced reboot Sunday at 03:00
+0 2 * * 0 /usr/local/bin/auto-reboot -qf -r 03:00 -N
 ```
+
+Use `-q` under cron: only errors reach the mail spool.
 
 ### Schedule Management
 
 ```bash
-# List active timers
+# List active timers (no root needed)
 auto-reboot --list
 
-# Delete by timestamp ID
+# Delete one timer by timestamp ID
 auto-reboot --delete 1753063354
 
-# Delete all (add -N to trigger confirmation prompt)
-auto-reboot -ND
+# Preview a delete-all, then run it with confirmation
+auto-reboot -D
+auto-reboot -N -D
 ```
 
 ## Logging
 
-All operations are logged to syslog via `logger -t auto-reboot`:
+Schedule and delete operations are logged to syslog via `logger -t auto-reboot`:
 
 ```bash
-# View logs
 sudo journalctl -t auto-reboot
 ```
 
 ## Safety Features
 
-- **Dry run by default** -- prevents accidental reboots
-- **Automatic sudo elevation** -- seamless privilege escalation
-- **Confirmation prompts** -- for destructive operations (delete-all)
-- **Input validation** -- time format, day specs, numeric ranges
-- **Readonly state** -- critical variables frozen after argument parsing
-- **Syslog audit trail** -- all operations logged with username
+- **Dry run by default**, for scheduling and for `--delete-all`
+- **Lazy privilege elevation**: only `-N`, delete, and install go through `sudo`
+- **Confirmation prompt** before `-N -D` deletes anything; refuses without a terminal
+- **Input validation** of times, day lists, integers, and environment values before anything runs
+- **One pending reboot** per host
+- **Readonly state** frozen after argument parsing
+- **Syslog audit trail** with the invoking user's name
+
+## Testing
+
+```bash
+./run_tests.sh              # full BATS suite
+./run_tests.sh cli          # one suite
+make test                   # suite plus shellcheck
+```
+
+The suite mocks `date`, `uptime`, `systemctl`, `systemd-run`, `logger`, `sudo`, `id`, and `install`; it never touches the real system.
 
 ## Troubleshooting
 
 ```bash
 # Verify systemd-run is available
-command -v systemd-run || auto-reboot --install
+command -v systemd-run
 
-# Check systemd health
+# Check systemd health (degraded is tolerated, offline is not)
 systemctl is-system-running
 
-# List auto-reboot timers
+# Inspect timers directly
 systemctl list-timers --all | grep auto-reboot
 
-# View recent logs
+# Recent log lines
 journalctl -t auto-reboot --since "1 hour ago"
 ```
 
 ## File Structure
 
 ```
-auto-reboot          # Main script
-.bash_completion     # Tab completion for bash
-run_tests.sh         # BATS test runner
-tests/               # BATS test suite (6 files + test_helper.bash)
-AUDIT-BASH.md        # BCS compliance audit report
-LICENSE              # GPL-3.0
-README.md            # This file
+auto-reboot                  # Main script
+auto-reboot.1                # Manpage
+auto-reboot.bash_completion  # Tab completion for bash
+Makefile                     # install / uninstall / check / test
+run_tests.sh                 # BATS test runner
+tests/                       # BATS test suite (6 files + test_helper.bash)
+AUDIT-BASH.md                # Code audit report
+LICENSE                      # GPL-3.0
+README.md                    # This file
 ```

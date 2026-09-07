@@ -1,8 +1,12 @@
 PREFIX  ?= /usr/local
 BINDIR  ?= $(PREFIX)/bin
-MANDIR  ?= $(PREFIX)/share/man
+MANDIR  ?= $(PREFIX)/share/man/man1
 COMPDIR ?= /etc/bash_completion.d
 DESTDIR ?=
+
+# Directory of this Makefile (trailing slash). Anchors source paths so
+# 'make install' works regardless of invoking CWD.
+srcdir := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 SCRIPT = auto-reboot
 MANPAGE = $(SCRIPT).1
@@ -14,15 +18,15 @@ all: help
 
 install:
 	install -d $(DESTDIR)$(BINDIR)
-	install -m 755 $(SCRIPT) $(DESTDIR)$(BINDIR)/$(SCRIPT)
-	install -d $(DESTDIR)$(MANDIR)/man1
-	install -m 644 $(MANPAGE) $(DESTDIR)$(MANDIR)/man1/$(MANPAGE)
+	install -m 755 $(srcdir)$(SCRIPT) $(DESTDIR)$(BINDIR)/$(SCRIPT)
+	install -d $(DESTDIR)$(MANDIR)
+	install -m 644 $(srcdir)$(MANPAGE) $(DESTDIR)$(MANDIR)/$(MANPAGE)
 	install -d $(DESTDIR)$(COMPDIR)
-	install -m 644 $(COMPLETION) $(DESTDIR)$(COMPDIR)/$(SCRIPT)
+	install -m 644 $(srcdir)$(COMPLETION) $(DESTDIR)$(COMPDIR)/$(SCRIPT)
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/$(SCRIPT)
-	rm -f $(DESTDIR)$(MANDIR)/man1/$(MANPAGE)
+	rm -f $(DESTDIR)$(MANDIR)/$(MANPAGE)
 	rm -f $(DESTDIR)$(COMPDIR)/$(SCRIPT)
 
 check:
@@ -33,8 +37,9 @@ ifndef DESTDIR
 endif
 
 test:
-	./run_tests.sh
-	shellcheck -x $(SCRIPT)
+	$(srcdir)run_tests.sh
+	shellcheck -x $(srcdir)$(SCRIPT) $(srcdir)run_tests.sh $(srcdir)$(COMPLETION)
+	shellcheck -x -s bash $(srcdir)tests/test_helper.bash
 
 help:
 	@echo "Targets:"
