@@ -231,6 +231,30 @@ Fri 2024-11-15 04:00:00 UTC  auto-reboot-1700028000.timer  auto-reboot-170002800
   assert_mock_called "systemd-run .*--unit=auto-reboot-[0-9][0-9]*"
 }
 
+@test "schedule_reboot: arms a wall-clock calendar timer, not a monotonic one" {
+  DRY_RUN=0
+  run schedule_reboot 3600
+  [[ "$status" -eq 0 ]]
+  assert_mock_called "systemd-run .*--on-calendar="
+  assert_mock_not_called "--on-active"
+}
+
+@test "schedule_reboot: calendar target is EPOCHSECONDS plus the delay" {
+  local -i delay=3600 before after target
+  local -- stamp
+  DRY_RUN=0
+  before=$EPOCHSECONDS
+  schedule_reboot "$delay"
+  after=$EPOCHSECONDS
+  # The mock logs the whole argv; the timestamp itself contains a space
+  stamp=$(sed -n 's/.*--on-calendar=\(.*\) --timer-property.*/\1/p' "$MOCK_LOG" | head -n1)
+  [[ -n $stamp ]]
+  # date is mocked to a fixed clock; the script builds "when" from EPOCHSECONDS
+  target=$(/usr/bin/date -d "$stamp" +%s)
+  (( target >= before + delay ))
+  (( target <= after + delay ))
+}
+
 # ── delete_schedule failure path ─────────────────────────────────
 
 @test "delete_schedule: reports failure when systemctl stop fails" {
@@ -245,8 +269,7 @@ Fri 2024-11-15 04:00:00 UTC  auto-reboot-1700028000.timer  auto-reboot-170002800
 # ── list_schedules next-elapse source ────────────────────────────
 
 @test "list_schedules: scheduled time is the list-timers NEXT column" {
-  # --on-active timers are monotonic: `systemctl show` has no realtime value,
-  # only list-timers computes the wall-clock NEXT (first four fields)
+  # list-timers renders NEXT in one stable layout (first four fields)
   local -- timer_line="Thu 2024-11-14 22:00:00 UTC  4 days left  n/a  n/a  auto-reboot-1700006400.timer  auto-reboot-1700006400.service"
   create_mock_systemctl "$timer_line"
   run list_schedules

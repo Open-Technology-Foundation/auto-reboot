@@ -2,7 +2,7 @@
 
 Conditional system reboot scheduler with flexible timing and day-of-week restrictions.
 
-**Version:** 1.3.1
+**Version:** 1.3.2
 **License:** GPL-3.0
 
 ## Overview
@@ -106,7 +106,10 @@ Both scheduling variables are validated at startup (exit 22 on a bad value) and 
 3. **Force reboot**: bypasses the reboot-required and uptime checks; time and day restrictions still apply.
 4. **One pending reboot**: an existing `auto-reboot-*.timer` is reported and left alone.
 
-Timers are transient systemd units named `auto-reboot-EPOCH.timer`, created with `systemd-run --on-active` and `AccuracySec=1s`.
+Timers are transient systemd units named `auto-reboot-EPOCH.timer`, created with
+`systemd-run --on-calendar` and `AccuracySec=1s`. The target is an absolute wall-clock
+timestamp, so a clock adjustment between scheduling and firing cannot move the reboot
+off its intended slot.
 
 ## Exit Status
 

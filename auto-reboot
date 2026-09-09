@@ -9,7 +9,7 @@ shopt -s inherit_errexit
 declare -rx PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 
 # Script metadata
-declare -r VERSION=1.3.1
+declare -r VERSION=1.3.2
 #shellcheck disable=SC2155 # BCS0103 metadata pattern; a failed realpath here is not recoverable
 declare -r SCRIPT_PATH=$(realpath -- "$0")
 declare -r SCRIPT_NAME=${SCRIPT_PATH##*/}
@@ -333,7 +333,11 @@ schedule_reboot() {
   logger -t "$SCRIPT_NAME" "Scheduling system reboot in ${delay}s for user $XUSER (uptime: ${UPTIME_DAYS}d)"
   # --quiet: without it systemd-run prints "Running timer as unit" to
   # stderr, which cron mails every night in the week before a reboot.
-  systemd-run --quiet --on-active="${delay}s" --timer-property=AccuracySec=1s \
+  # --on-calendar (wall clock) rather than --on-active (monotonic): the target
+  # is a wall-clock time up to a week out, and a monotonic deadline silently
+  # drifts off it if the clock is stepped in the meantime. Seen 2026-09-09 on a
+  # host where a Sunday 04:20 reboot had become Tuesday 12:20.
+  systemd-run --quiet --on-calendar="$when" --timer-property=AccuracySec=1s \
       --unit="$unit" --description="Scheduled reboot by $SCRIPT_NAME" \
       /sbin/shutdown -r now "Scheduled reboot by $SCRIPT_NAME" \
     || { error 'systemd-run: Failed to schedule reboot'; return 1; }
@@ -358,9 +362,8 @@ list_schedules() {
 
   for timer in "${timers[@]}"; do
     count+=1
-    # --on-active timers are monotonic, so `systemctl show` has no realtime
-    # value; only list-timers computes NEXT (its first four fields:
-    # weekday date time zone). LC_ALL=C keeps that layout stable.
+    # list-timers renders NEXT for both timer kinds in one stable layout (its
+    # first four fields: weekday date time zone). LC_ALL=C keeps it stable.
     next=$(LC_ALL=C systemctl list-timers --all --no-pager --no-legend "$timer" 2>/dev/null \
       | awk -v t="$timer" '$0 ~ t && $2 ~ /^[0-9][0-9][0-9][0-9]-/ {print $1, $2, $3, $4; exit}' ||:)
     echo "$count. $timer - Scheduled: ${next:-unknown}"
