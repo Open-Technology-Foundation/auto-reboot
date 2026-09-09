@@ -333,10 +333,12 @@ schedule_reboot() {
   logger -t "$SCRIPT_NAME" "Scheduling system reboot in ${delay}s for user $XUSER (uptime: ${UPTIME_DAYS}d)"
   # --quiet: without it systemd-run prints "Running timer as unit" to
   # stderr, which cron mails every night in the week before a reboot.
-  # --on-calendar (wall clock) rather than --on-active (monotonic): the target
-  # is a wall-clock time up to a week out, and a monotonic deadline silently
-  # drifts off it if the clock is stepped in the meantime. Seen 2026-09-09 on a
-  # host where a Sunday 04:20 reboot had become Tuesday 12:20.
+  # --on-calendar (an absolute wall-clock target) rather than --on-active (a
+  # delay in seconds): the reboot slot IS a wall-clock time up to a week out,
+  # so state it as one. systemd then exposes it as NextElapseUSecRealtime, so a
+  # wrong target is visible on inspection instead of hidden behind "N seconds
+  # from activation", and a clock correction between scheduling and firing
+  # carries the timer with it rather than preserving a stale offset.
   systemd-run --quiet --on-calendar="$when" --timer-property=AccuracySec=1s \
       --unit="$unit" --description="Scheduled reboot by $SCRIPT_NAME" \
       /sbin/shutdown -r now "Scheduled reboot by $SCRIPT_NAME" \
