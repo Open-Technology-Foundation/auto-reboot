@@ -6,7 +6,6 @@ setup() {
   _common_setup
   create_mock_systemctl ""
   create_mock_systemd_run
-  create_mock_date 1700006400 2
   source_script
   DRY_RUN=1
   UPTIME_DAYS=10
@@ -225,10 +224,10 @@ Fri 2024-11-15 04:00:00 UTC  auto-reboot-1700028000.timer  auto-reboot-170002800
   assert_mock_not_called "systemd-run"
 }
 
-@test "schedule_reboot: unit name is epoch-based" {
+@test "schedule_reboot: unit name is the pinned epoch" {
   DRY_RUN=0
   schedule_reboot 3600
-  assert_mock_called "systemd-run .*--unit=auto-reboot-[0-9][0-9]*"
+  assert_mock_called "systemd-run .*--unit=auto-reboot-1700006400 "
 }
 
 @test "schedule_reboot: arms a wall-clock calendar timer, not a monotonic one" {
@@ -239,20 +238,14 @@ Fri 2024-11-15 04:00:00 UTC  auto-reboot-1700028000.timer  auto-reboot-170002800
   assert_mock_not_called "--on-active"
 }
 
-@test "schedule_reboot: calendar target is EPOCHSECONDS plus the delay" {
-  local -i delay=3600 before after target
+@test "schedule_reboot: calendar target is the pinned clock plus the delay" {
   local -- stamp
   DRY_RUN=0
-  before=$EPOCHSECONDS
-  schedule_reboot "$delay"
-  after=$EPOCHSECONDS
+  schedule_reboot 3600
   # The mock logs the whole argv; the timestamp itself contains a space
   stamp=$(sed -n 's/.*--on-calendar=\(.*\) --timer-property.*/\1/p' "$MOCK_LOG" | head -n1)
-  [[ -n $stamp ]]
-  # date is mocked to a fixed clock; the script builds "when" from EPOCHSECONDS
-  target=$(/usr/bin/date -d "$stamp" +%s)
-  (( target >= before + delay ))
-  (( target <= after + delay ))
+  # Wed 2023-11-15 00:00 UTC + 3600
+  [[ $stamp == "2023-11-15 01:00:00" ]]
 }
 
 # ── delete_schedule failure path ─────────────────────────────────

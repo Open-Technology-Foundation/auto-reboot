@@ -4,7 +4,6 @@
 setup() {
   load test_helper
   _common_setup
-  create_mock_date 1700006400 2
   source_script
   ALLOWED_DAYS=()
 }
@@ -26,8 +25,7 @@ teardown() {
   # Hmm, let me use a simpler epoch.
   # Use epoch where 22:00 is in the future: say it's 10:00 UTC
   # 10:00 UTC = 36000 seconds into day
-  create_mock_date 1699956000 2  # day_start + 36000 = 10:00 UTC
-  source_script
+  pin_clock 1699956000  # day_start + 36000 = 10:00 UTC
   ALLOWED_DAYS=()
 
   run calculate_reboot_delay "22:00"
@@ -40,8 +38,7 @@ teardown() {
 @test "calculate_reboot_delay: time already passed schedules tomorrow" {
   # Current: 23:00, target: 04:00 → tomorrow 04:00
   # Use day_start + 23*3600 = day_start + 82800
-  create_mock_date 1700002800 2  # 1699920000 + 82800 = 23:00 UTC
-  source_script
+  pin_clock 1700002800  # 1699920000 + 82800 = 23:00 UTC
   ALLOWED_DAYS=()
 
   run calculate_reboot_delay "04:00"
@@ -54,8 +51,7 @@ teardown() {
 @test "calculate_reboot_delay: exact current time schedules tomorrow" {
   # If target == current, it should schedule tomorrow
   # epoch at 22:00 exactly: day_start + 79200
-  create_mock_date 1699999200 2
-  source_script
+  pin_clock 1699999200
   ALLOWED_DAYS=()
 
   run calculate_reboot_delay "22:00"
@@ -82,8 +78,7 @@ teardown() {
 
 @test "calculate_reboot_delay: today allowed and time in future" {
   # Tuesday (2), allowed=[2,4], time in future
-  create_mock_date 1699956000 2  # 10:00 UTC, Tuesday
-  source_script
+  pin_clock 1699956000  # 10:00 UTC, Tuesday
   ALLOWED_DAYS=(2 4)  # Tue, Thu
 
   run calculate_reboot_delay "22:00"
@@ -94,8 +89,7 @@ teardown() {
 
 @test "calculate_reboot_delay: today not allowed finds next allowed day" {
   # Tuesday (2), allowed=[4] (Thursday only)
-  create_mock_date 1699956000 2  # 10:00 UTC, Tuesday
-  source_script
+  pin_clock 1699956000  # 10:00 UTC, Tuesday
   ALLOWED_DAYS=(4)  # Thursday only
 
   run calculate_reboot_delay "22:00"
@@ -109,8 +103,7 @@ teardown() {
   # Tuesday (2) at 23:00, allowed=[2,5], target=04:00
   # Today is allowed but 04:00 already passed → skip today
   # Next Tuesday is in 7 days, but Friday (5) is in 3 days
-  create_mock_date 1700002800 2  # 23:00 UTC, Tuesday
-  source_script
+  pin_clock 1700002800  # 23:00 UTC, Tuesday
   ALLOWED_DAYS=(2 5)  # Tue, Fri
 
   run calculate_reboot_delay "04:00"
@@ -124,8 +117,7 @@ teardown() {
 
 @test "calculate_reboot_delay: Sunday wrap-around" {
   # Saturday (6), allowed=[0] (Sunday only), time in future
-  create_mock_date 1699956000 6  # 10:00 UTC, Saturday
-  source_script
+  pin_clock 1700301600  # Sat 2023-11-18 10:00 UTC
   ALLOWED_DAYS=(0)  # Sunday only
 
   run calculate_reboot_delay "22:00"
@@ -136,21 +128,34 @@ teardown() {
   [[ "$output" == "129600" ]]
 }
 
-# ── Real date(1) ─────────────────────────────────────────────────
+# ── Clock source ─────────────────────────────────────────────────
 
-@test "calculate_reboot_delay: leading-zero time works with real date" {
-  rm -f "$MOCK_BIN"/date
+@test "calculate_reboot_delay: leading-zero time resolves through real date -d" {
+  # pinned Wed 00:00 UTC → 08:09 today is 29340s away
   run calculate_reboot_delay "08:09"
   [[ "$status" -eq 0 ]]
-  [[ "$output" =~ ^[0-9]+$ ]]
-  (( output > 0 && output <= 86400 ))
+  [[ "$output" == "29340" ]]
 }
 
 @test "calculate_reboot_delay: date failure returns error, never a negative delay" {
-  rm -f "$MOCK_BIN"/date
   run calculate_reboot_delay "25:00"
   [[ "$status" -ne 0 ]]
   [[ ! $output =~ (^|[[:space:]])-[0-9]+ ]]
+}
+
+@test "calculate_reboot_delay: never asks date(1) for the current time or weekday" {
+  # A date that refuses +%s/+%w: only the builtin clock may answer those
+  cat > "$MOCK_BIN"/date <<'MOCK'
+#!/usr/bin/env bash
+case $* in +%s|+%w) echo 'date asked for now' >&2; exit 1 ;; esac
+exec /usr/bin/date "$@"
+MOCK
+  chmod +x "$MOCK_BIN"/date
+  pin_clock 1700301600  # Sat 10:00 UTC
+  ALLOWED_DAYS=(0)
+  run calculate_reboot_delay "22:00"
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == "129600" ]]
 }
 
 #fin

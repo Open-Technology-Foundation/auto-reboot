@@ -212,6 +212,19 @@ teardown() {
   assert_mock_called "install -m 755 -o root -g root -- .*auto-reboot $PREFIX/bin/auto-reboot"
 }
 
+@test "install_auto_reboot: reports a stale symlink it cannot remove" {
+  create_mock_install
+  mkdir -p "$PREFIX"/bin
+  ln -s /nonexistent "$PREFIX"/bin/auto-reboot
+  # rm that refuses: the failure must surface with context, not a bare set -e abort
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$MOCK_BIN"/rm
+  chmod +x "$MOCK_BIN"/rm
+  run install_auto_reboot
+  [[ "$status" -eq 1 ]]
+  assert_output_contains "Cannot remove"
+  assert_mock_not_called "install -m 755"
+}
+
 @test "install_auto_reboot: never runs apt, even without systemd-run on PATH" {
   create_mock_install
   create_mock_sudo

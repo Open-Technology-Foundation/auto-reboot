@@ -5,7 +5,7 @@ setup() {
   load test_helper
   _common_setup
   # Real date: uptime arithmetic must agree with the boot times generated below
-  create_mock_uptime "$(date -d '1 hour ago' +'%Y-%m-%d %H:%M:%S')"
+  create_mock_uptime "$(boot_ago 1 hour)"
   source_script
   REBOOT_NEEDED=0
   FORCE_REBOOT=0
@@ -34,9 +34,9 @@ teardown() {
 # ── Uptime threshold ─────────────────────────────────────────────
 
 @test "check_reboot_conditions: sets UPTIME_DAYS from uptime" {
-  create_mock_uptime "$(date -d '5 days ago' +'%Y-%m-%d %H:%M:%S')"
+  create_mock_uptime "$(boot_ago 5 days)"
   check_reboot_conditions
-  [[ "$UPTIME_DAYS" -ge 4 && "$UPTIME_DAYS" -le 5 ]]
+  [[ "$UPTIME_DAYS" -eq 5 ]]
 }
 
 @test "check_reboot_conditions: high uptime exceeds threshold" {
@@ -46,13 +46,13 @@ teardown() {
 }
 
 @test "check_reboot_conditions: low uptime below threshold" {
-  create_mock_uptime "$(date -d '2 days ago' +'%Y-%m-%d %H:%M:%S')"
+  create_mock_uptime "$(boot_ago 2 days)"
   check_reboot_conditions
   [[ "$REBOOT_NEEDED" -eq 0 ]]
 }
 
 @test "check_reboot_conditions: uptime equal to threshold triggers reboot" {
-  create_mock_uptime "$(date -d '14 days ago' +'%Y-%m-%d %H:%M:%S')"
+  create_mock_uptime "$(boot_ago 14 days)"
   check_reboot_conditions
   [[ "$REBOOT_NEEDED" -eq 1 ]]
 }
@@ -81,9 +81,9 @@ teardown() {
 }
 
 @test "check_reboot_conditions: UPTIME_DAYS calculated correctly" {
-  create_mock_uptime "$(date -d '10 days ago' +'%Y-%m-%d %H:%M:%S')"
+  create_mock_uptime "$(boot_ago 10 days)"
   check_reboot_conditions
-  [[ "$UPTIME_DAYS" -ge 9 && "$UPTIME_DAYS" -le 10 ]]
+  [[ "$UPTIME_DAYS" -eq 10 ]]
 }
 
 @test "check_reboot_conditions: uptime failure aborts instead of guessing" {

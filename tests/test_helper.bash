@@ -5,12 +5,14 @@
 # - _common_setup/_common_teardown with temp dirs and mock PATH
 # - source_script() to source auto-reboot for unit testing individual functions
 # - run_script() to run main() in a subshell for CLI/integration testing
-# - Mock creators for systemctl, systemd-run, logger, date, uptime, sudo, id,
-#   install, and the reboot-required file
+# - Mock creators for systemctl, systemd-run, logger, uptime, sudo, id,
+#   install, apt-get, stat, and the reboot-required file
 # - Custom assertions
 #
 # Test hooks used by the script itself (no source mutation needed):
 #   REBOOT_REQUIRED_FILE  path checked instead of /var/run/reboot-required
+#   AUTO_REBOOT_CONF      path read instead of /etc/auto-reboot.conf
+#   AUTO_REBOOT_NOW       epoch used as "now" instead of $EPOCHSECONDS (pin_clock)
 #   PREFIX                install target for --install
 #   elevate_to_root()     overridden with a no-op after sourcing
 #
@@ -69,53 +71,24 @@ MOCK
   chmod +x "$MOCK_BIN"/systemd-run
 }
 
-# create_mock_date [EPOCH] [WEEKDAY] — a date mock with a fixed clock.
-#
-#   date +%s                    → EPOCH (default 1700000000)
-#   date +%w                    → WEEKDAY (default 3 = Wednesday)
-#   date -d "today H:M" +%s     → midnight-UTC-of-EPOCH + H:M
-#   date -d "tomorrow H:M" +%s  → + 86400
-#   date -d "+N days H:M" +%s   → + N*86400
-#   anything else               → real date (display formatting, uptime parse)
-create_mock_date() {
-  local -i fixed_epoch=${1:-1700000000}
-  local -i fixed_weekday=${2:-3}
-  cat > "$MOCK_BIN"/date <<MOCK
-#!/usr/bin/env bash
-FIXED_EPOCH=$fixed_epoch
-FIXED_WEEKDAY=$fixed_weekday
-DAY_START=\$(( FIXED_EPOCH - (FIXED_EPOCH % 86400) ))
-
-parse_hm() {
-  # H:M with 1-2 digits each; 10# guards against octal (08, 09)
-  local args="\$*"
-  local day_offset=0 h=0 m=0
-  if [[ "\$args" =~ today\ +([0-9]{1,2}):([0-9]{1,2}) ]]; then
-    day_offset=0; h=\${BASH_REMATCH[1]}; m=\${BASH_REMATCH[2]}
-  elif [[ "\$args" =~ tomorrow\ +([0-9]{1,2}):([0-9]{1,2}) ]]; then
-    day_offset=1; h=\${BASH_REMATCH[1]}; m=\${BASH_REMATCH[2]}
-  elif [[ "\$args" =~ \+([0-9]+)\ +days?\ +([0-9]{1,2}):([0-9]{1,2}) ]]; then
-    day_offset=\${BASH_REMATCH[1]}; h=\${BASH_REMATCH[2]}; m=\${BASH_REMATCH[3]}
-  else
-    return 1
-  fi
-  echo \$(( DAY_START + day_offset * 86400 + 10#\$h * 3600 + 10#\$m * 60 ))
+# pin_clock EPOCH — freezes the script's clock. AUTO_REBOOT_NOW reaches
+# run_script children through the environment; NOW is what functions sourced
+# by source_script read. TZ is UTC for the whole suite (_common_setup), so
+# "22:00" is always midnight-UTC-of-EPOCH + 79200.
+pin_clock() {
+  export AUTO_REBOOT_NOW=$1 NOW=$1
 }
 
-case "\$*" in
-  +%s|"+%s "*) echo "\$FIXED_EPOCH"; exit 0 ;;
-  +%w)         echo "\$FIXED_WEEKDAY"; exit 0 ;;
-esac
-
-if [[ "\$1" == -d && "\${*: -1}" == +%s ]]; then
-  if result=\$(parse_hm "\$2"); then
-    echo "\$result"
-    exit 0
-  fi
-fi
-exec /usr/bin/date "\$@"
-MOCK
-  chmod +x "$MOCK_BIN"/date
+# boot_ago N hour|hours|day|days — an `uptime -s` timestamp N units before the
+# pinned clock, so uptime tests are exact rather than "roughly N days"
+boot_ago() {
+  local -i seconds
+  case $2 in
+    hour|hours) seconds=$(( $1 * 3600 )) ;;
+    day|days)   seconds=$(( $1 * 86400 )) ;;
+    *) >&2 echo "boot_ago: bad unit ${2@Q}"; return 1 ;;
+  esac
+  printf '%(%F %T)T' "$((AUTO_REBOOT_NOW - seconds))"
 }
 
 create_mock_uptime() {
@@ -203,6 +176,11 @@ _common_setup() {
   AUTO_REBOOT_CONF="$TEST_TEMP_DIR"/auto-reboot.conf
   PREFIX="$TEST_TEMP_DIR"/prefix
 
+  # Deterministic clock: Wed 2023-11-15 00:00:00 UTC. Tests needing another
+  # instant call pin_clock; date(1) still runs for real, in UTC.
+  export TZ=UTC
+  pin_clock 1700006400
+
   # Always needed: the script calls logger on every state change
   create_mock_logger
 
@@ -251,6 +229,7 @@ source_script() {
   export SCRIPT_PATH=$SCRIPT_UNDER_TEST
   export SCRIPT_NAME=auto-reboot
   export CONF_FILE=$AUTO_REBOOT_CONF
+  export NOW=$AUTO_REBOOT_NOW
   export XUSER=${USER:-testuser}
   export RED='' CYAN='' YELLOW='' NC=''
   export VERBOSE=1

@@ -9,17 +9,19 @@ shopt -s inherit_errexit
 declare -rx PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 
 # Script metadata
-declare -r VERSION=1.4.0
+declare -r VERSION=1.4.1
 #shellcheck disable=SC2155 # BCS0103 metadata pattern; a failed realpath here is not recoverable
 declare -r SCRIPT_PATH=$(realpath -- "$0")
 declare -r SCRIPT_NAME=${SCRIPT_PATH##*/}
 
 # Built-in defaults; CONF_FILE overrides them (read_conf), CLI options override both
 declare -- MACHINE_REBOOT_TIME=22:00 MACHINE_UPTIME_MAXDAYS=14 MACHINE_ALLOWED_DAYS=''
-declare -- PREFIX=${PREFIX:-/usr/local}
-# Overridable so the test suite can stand in for the system files
+declare -r PREFIX=${PREFIX:-/usr/local}
+# Overridable so the test suite can stand in for the system files and the clock
 declare -r REBOOT_REQUIRED_FILE=${REBOOT_REQUIRED_FILE:-/var/run/reboot-required}
 declare -r CONF_FILE=${AUTO_REBOOT_CONF:-/etc/$SCRIPT_NAME.conf}
+# Read once: every "now" in a run (uptime, delay, unit name, target) is this instant
+declare -r NOW=${AUTO_REBOOT_NOW:-$EPOCHSECONDS}
 
 # Runtime state (frozen readonly after argument parsing)
 declare -i REBOOT_NEEDED=0 DRY_RUN=1 FORCE_REBOOT=0 UPTIME_DAYS=0
@@ -208,8 +210,7 @@ is_reboot_day_allowed() {
   ((${#ALLOWED_DAYS[@]})) || return 0
 
   local -i current_day allowed_day
-  # date(1) rather than printf '%(%w)T' so the test suite can mock the clock
-  current_day=$(date +'%w')  # 0-6, 0=Sunday
+  printf -v current_day '%(%w)T' "$NOW"  # 0-6, 0=Sunday
 
   for allowed_day in "${ALLOWED_DAYS[@]}"; do
     (( current_day != allowed_day )) || return 0
@@ -222,15 +223,14 @@ check_reboot_conditions() {
   # Globals modified inside function scope
   declare -g UPTIME_DAYS REBOOT_NEEDED
   local -- boot_time
-  local -i uptime_start current_time
+  local -i uptime_start
 
   [[ ! -f $REBOOT_REQUIRED_FILE ]] || REBOOT_NEEDED=1
 
   boot_time=$(uptime -s) || die 1 'uptime -s failed; cannot determine boot time'
+  # date -d stays: it parses a timestamp, which printf '%()T' cannot do
   uptime_start=$(date -d "$boot_time" +'%s') || die 1 "Cannot parse boot time ${boot_time@Q}"
-  # date(1) rather than $EPOCHSECONDS so the test suite can mock the clock
-  current_time=$(date +'%s')
-  UPTIME_DAYS=$(( (current_time - uptime_start) / 86400 ))
+  UPTIME_DAYS=$(( (NOW - uptime_start) / 86400 ))
 
   (( UPTIME_DAYS < MACHINE_UPTIME_MAXDAYS )) || REBOOT_NEEDED=1
 
@@ -238,15 +238,23 @@ check_reboot_conditions() {
   (( ! FORCE_REBOOT )) || REBOOT_NEEDED=1
 }
 
-# Print epoch seconds for "DAYSPEC HH:MM" (e.g. "today 22:00"); fails if date rejects it
-epoch_at() { date -d "$1 $2" +'%s' 2>/dev/null; }
+# Print epoch seconds for HH:MM on the day DAYS after NOW (0 = today); fails if
+# date rejects it. date -d stays: bash has no mktime, and adding DAYS*86400 is
+# an hour out across a DST change. The offset precedes the time on purpose:
+# GNU date reads a trailing "+3" as a UTC offset, not a day count.
+# Args: days_ahead hm
+epoch_at() {
+  local -- base
+  printf -v base '%(%F)T' "$NOW"
+  date -d "$base +$1 days $2" +'%s' 2>/dev/null
+}
 
 # Calculate seconds until next reboot window
 # Args: target_time (HH:MM) — Stdout: delay in seconds
 # Returns 1 on invalid input, date failure, or no valid day within 7 days
 calculate_reboot_delay() {
   local -- target_time=$1 hm allowed_day
-  local -i current_epoch target_epoch hour minute
+  local -i target_epoch hour minute
   local -i days_ahead current_day check_day found=0
 
   [[ $target_time =~ ^([0-9]{1,2}):([0-9]{2})$ ]] \
@@ -255,21 +263,18 @@ calculate_reboot_delay() {
   hour=$((10#${BASH_REMATCH[1]}))
   minute=$((10#${BASH_REMATCH[2]}))
   printf -v hm '%02d:%02d' "$hour" "$minute"
-  # date(1) rather than $EPOCHSECONDS so the test suite can mock the clock
-  current_epoch=$(date +'%s')
 
   if (( ${#ALLOWED_DAYS[@]} == 0 )); then
-    target_epoch=$(epoch_at today "$hm") || { error "Cannot resolve time ${hm@Q}"; return 1; }
-    if (( target_epoch <= current_epoch )); then
-      target_epoch=$(epoch_at tomorrow "$hm") || { error "Cannot resolve time ${hm@Q}"; return 1; }
+    target_epoch=$(epoch_at 0 "$hm") || { error "Cannot resolve time ${hm@Q}"; return 1; }
+    if (( target_epoch <= NOW )); then
+      target_epoch=$(epoch_at 1 "$hm") || { error "Cannot resolve time ${hm@Q}"; return 1; }
     fi
   else
-    # date(1) rather than printf '%(%w)T' so the test suite can mock the clock
-    current_day=$(date +'%w')
+    printf -v current_day '%(%w)T' "$NOW"
 
     # Try today first
-    target_epoch=$(epoch_at today "$hm") || { error "Cannot resolve time ${hm@Q}"; return 1; }
-    if (( target_epoch > current_epoch )) && is_reboot_day_allowed; then
+    target_epoch=$(epoch_at 0 "$hm") || { error "Cannot resolve time ${hm@Q}"; return 1; }
+    if (( target_epoch > NOW )) && is_reboot_day_allowed; then
       found=1
     fi
 
@@ -279,7 +284,7 @@ calculate_reboot_delay() {
         check_day=$(( (current_day + days_ahead) % 7 ))
         for allowed_day in "${ALLOWED_DAYS[@]}"; do
           if (( check_day == allowed_day )); then
-            target_epoch=$(epoch_at "+$days_ahead days" "$hm") \
+            target_epoch=$(epoch_at "$days_ahead" "$hm") \
               || { error "Cannot resolve time ${hm@Q}"; return 1; }
             found=1
             break 2
@@ -291,7 +296,7 @@ calculate_reboot_delay() {
     (( found )) || { error 'No valid reboot day found in next 7 days'; return 1; }
   fi
 
-  echo "$((target_epoch - current_epoch))"
+  echo "$((target_epoch - NOW))"
 }
 
 # Print names of scheduled auto-reboot timers, one per line (nothing when none)
@@ -328,8 +333,8 @@ schedule_reboot() {
     return 0
   fi
 
-  unit="$SCRIPT_NAME-$EPOCHSECONDS"
-  printf -v when '%(%F %T)T' "$((EPOCHSECONDS + delay))"
+  unit="$SCRIPT_NAME-$NOW"
+  printf -v when '%(%F %T)T' "$((NOW + delay))"
   logger -t "$SCRIPT_NAME" "Scheduling system reboot in ${delay}s for user $XUSER (uptime: ${UPTIME_DAYS}d)"
   # --quiet: without it systemd-run prints "Running timer as unit" to
   # stderr, which cron mails every night in the week before a reboot.
@@ -446,7 +451,8 @@ install_auto_reboot() {
     return 0
   fi
   # A symlink left by older --install versions would make install(1) refuse the copy
-  [[ ! -L $target ]] || rm -f -- "$target"
+  [[ ! -L $target ]] || rm -f -- "$target" \
+    || { error "Cannot remove stale link ${target@Q}"; return 1; }
   install -d -- "$bindir" || { error "Cannot create ${bindir@Q}"; return 1; }
   install -m 755 -o root -g root -- "$SCRIPT_PATH" "$target" \
     || { error "Failed to install ${target@Q}"; return 1; }
@@ -483,6 +489,9 @@ elevate_to_root() {
 
 main() {
   local -a args=("$@")  # replayed verbatim by elevate_to_root
+
+  # NOW is a test seam; a bad value would aim the timer at 1970
+  [[ $NOW =~ ^[0-9]+$ ]] || die 22 "AUTO_REBOOT_NOW ${NOW@Q} is not an epoch"
 
   # Config values are validated before anything else, including elevation
   read_conf ||:
@@ -582,7 +591,7 @@ main() {
   local -i delay
   local -- target_time
   delay=$(calculate_reboot_delay "$MACHINE_REBOOT_TIME") || die 1 'Failed to calculate reboot delay'
-  printf -v target_time '%(%F %T %Z)T' "$((EPOCHSECONDS + delay))"
+  printf -v target_time '%(%F %T %Z)T' "$((NOW + delay))"
   echo "Delay: $delay"
   echo "Scheduled: $target_time"
 

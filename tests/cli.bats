@@ -6,7 +6,6 @@ setup() {
   _common_setup
   create_mock_systemctl ""
   create_mock_systemd_run
-  create_mock_date 1700006400 2
   create_mock_uptime "2024-11-01 10:00:00"
   create_mock_sudo
   create_mock_id
@@ -348,8 +347,7 @@ teardown() {
 }
 
 @test "cli: reboot-required absent and low uptime reports not required" {
-  create_mock_uptime "$(date -d '1 hour ago' +'%Y-%m-%d %H:%M:%S')"
-  rm -f "$MOCK_BIN"/date
+  create_mock_uptime "$(boot_ago 1 hour)"
   run_script
   [[ "$status" -eq 0 ]]
   assert_output_contains "Reboot not required"
@@ -388,6 +386,29 @@ teardown() {
   run bash -c 'source "$1"; main -D' "$SCRIPT_UNDER_TEST" "$(_sanitize_script)"
   [[ "$status" -eq 0 ]]
   assert_mock_not_called "sudo"
+}
+
+# ── Clock seam ────────────────────────────────────────────────────
+
+@test "cli: AUTO_REBOOT_NOW pins the clock for the whole run" {
+  pin_clock 1699956000  # Tue 2023-11-14 10:00 UTC
+  run_script -f -r 22:00
+  [[ "$status" -eq 0 ]]
+  assert_output_contains "Delay: 43200"
+}
+
+@test "cli: AUTO_REBOOT_NOW drives the weekday too" {
+  pin_clock 1699956000  # Tuesday; next Saturday 22:00 is 4 days + 12h away
+  run_script -f -r 22:00 -a Sat
+  [[ "$status" -eq 0 ]]
+  assert_output_contains "Delay: 388800"
+}
+
+@test "cli: non-numeric AUTO_REBOOT_NOW is rejected" {
+  export AUTO_REBOOT_NOW=soon
+  run_script -f
+  [[ "$status" -eq 22 ]]
+  assert_output_contains "AUTO_REBOOT_NOW"
 }
 
 #fin

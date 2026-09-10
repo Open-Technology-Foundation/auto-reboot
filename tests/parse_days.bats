@@ -200,30 +200,28 @@ teardown() {
 }
 
 @test "is_reboot_day_allowed: matching day returns 0" {
-  # Mock date to return Wednesday (3)
-  create_mock_date 1700000000 3
+  pin_clock 1700086400  # Wed 2023-11-15
   ALLOWED_DAYS=(1 3 5)  # Mon, Wed, Fri
   run is_reboot_day_allowed
   [[ "$status" -eq 0 ]]
 }
 
 @test "is_reboot_day_allowed: non-matching day returns 1" {
-  # Mock date to return Tuesday (2)
-  create_mock_date 1700000000 2
+  pin_clock 1700000000  # Tue 2023-11-14
   ALLOWED_DAYS=(1 3 5)  # Mon, Wed, Fri
   run is_reboot_day_allowed
   [[ "$status" -eq 1 ]]
 }
 
 @test "is_reboot_day_allowed: Sunday (0) in allowed list" {
-  create_mock_date 1700000000 0
+  pin_clock 1699827200  # Sun 2023-11-12
   ALLOWED_DAYS=(0 6)  # Sun, Sat
   run is_reboot_day_allowed
   [[ "$status" -eq 0 ]]
 }
 
 @test "is_reboot_day_allowed: Saturday (6) not in allowed list" {
-  create_mock_date 1700000000 6
+  pin_clock 1699740800  # Sat 2023-11-11
   ALLOWED_DAYS=(1 2 3 4 5)  # Mon-Fri
   run is_reboot_day_allowed
   [[ "$status" -eq 1 ]]

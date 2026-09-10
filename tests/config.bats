@@ -8,7 +8,6 @@ setup() {
   _common_setup
   create_mock_systemctl ""
   create_mock_systemd_run
-  create_mock_date 1700006400 2
   create_mock_uptime "2024-11-01 10:00:00"
   create_mock_sudo
   create_mock_id
@@ -22,7 +21,7 @@ teardown() {
 
 write_conf() { printf '%s\n' "$@" > "$AUTO_REBOOT_CONF"; }
 
-# Delay in seconds printed by a dry run; the clock is mocked so it is stable
+# Delay in seconds printed by a dry run; the clock is pinned so it is stable
 delay_of() {
   run_script "$@"
   [[ $status -eq 0 ]] || { >&2 echo "run_script $* failed: $output"; return 1; }
@@ -56,8 +55,7 @@ delay_of() {
 }
 
 @test "config: MACHINE_UPTIME_MAXDAYS=1 triggers reboot on a 10-day uptime" {
-  create_mock_uptime "$(date -d '10 days ago' +'%Y-%m-%d %H:%M:%S')"
-  rm -f "$MOCK_BIN"/date
+  create_mock_uptime "$(boot_ago 10 days)"
   write_conf 'MACHINE_UPTIME_MAXDAYS=1'
   run_script
   [[ $status -eq 0 ]]

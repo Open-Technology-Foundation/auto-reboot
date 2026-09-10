@@ -2,7 +2,7 @@
 
 Conditional system reboot scheduler with flexible timing and day-of-week restrictions.
 
-**Version:** 1.4.0
+**Version:** 1.4.1
 **License:** GPL-3.0
 
 ## Overview
@@ -200,7 +200,7 @@ sudo journalctl -t auto-reboot
 make test                   # suite plus shellcheck
 ```
 
-The suite mocks `date`, `uptime`, `systemctl`, `systemd-run`, `logger`, `sudo`, `id`, `install`, `stat`, and `apt-get`; it never touches the real system.
+The suite pins the clock (one epoch, UTC) and mocks `uptime`, `systemctl`, `systemd-run`, `logger`, `sudo`, `id`, `install`, `stat`, and `apt-get`; it never touches the real system.
 
 ## Troubleshooting
 
