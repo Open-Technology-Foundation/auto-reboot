@@ -1,5 +1,5 @@
 .\" auto-reboot(1) - Schedule conditional system reboots via systemd timers
-.TH AUTO\-REBOOT 1 "2026-09-09" "1.3.2" "System Administration"
+.TH AUTO\-REBOOT 1 "2026-09-11" "1.4.0" "System Administration"
 .
 .SH NAME
 auto\-reboot \- schedule conditional system reboots via systemd timers
@@ -147,27 +147,42 @@ Mixed	Mon,Wed,5
 .PP
 Case insensitive. Whitespace around commas is ignored.
 .
-.SH ENVIRONMENT
+.SH CONFIGURATION
+Site defaults are read from
+.IR /etc/auto\-reboot.conf ,
+which is sourced as bash. The file must be owned by root and must not be
+group\- or world\-writable; otherwise it is refused (exit status 13). A file
+that fails to load is fatal (exit status 19). No other path is searched.
+Command\-line options override every value.
 .TP
 .B MACHINE_REBOOT_TIME
-Default reboot time in HH:MM format. Default: 22:00.
+Reboot time in HH:MM format. Default: 22:00.
 Overridden by
 .BR \-\-reboot\-time .
 .TP
 .B MACHINE_UPTIME_MAXDAYS
-Default maximum uptime in days. Default: 14.
+Maximum uptime in days. Default: 14.
 Overridden by
 .BR \-\-max\-uptime\-days .
+.TP
+.B MACHINE_ALLOWED_DAYS
+Day list in the formats accepted by
+.BR \-\-allowed\-days .
+Default: empty (any day).
+Overridden by
+.BR \-\-allowed\-days ;
+an empty argument clears the restriction.
+.PP
+Values are validated at startup (exit status 19 on a bad value). The
+.BR sudo (8)
+re\-execution reads the same file, so settings apply to sudo\-group members
+as well as to root.
+.SH ENVIRONMENT
 .TP
 .B PREFIX
 Installation prefix for
 .BR \-\-install .
 Default: /usr/local.
-.PP
-The two scheduling variables are validated at startup (exit status 22 on a bad
-value) and are forwarded as options across the
-.BR sudo (8)
-re\-execution, so they work for sudo\-group members as well as for root.
 .
 .SH SCHEDULING LOGIC
 .IP 1. 3
@@ -205,15 +220,19 @@ confirmation).
 Unexpected positional argument.
 .TP
 .B 13
-Not root and not a member of the sudo group.
+Not root and not a member of the sudo group; or the configuration file is not
+owned by root or is writable by group or others.
 .TP
 .B 18
 .BR systemd\-run (1)
 not found.
 .TP
+.B 19
+Configuration file failed to load, or holds an invalid value.
+.TP
 .B 22
-Invalid option, option value, or environment value (bad time format, invalid
-day, missing option value).
+Invalid option or option value (bad time format, invalid day, missing option
+value).
 .
 .SH EXAMPLES
 Check whether a reboot is needed (dry run, no root required):
@@ -276,9 +295,19 @@ auto\-reboot \-N \-D
 .
 .SH FILES
 .TP
+.I /etc/auto\-reboot.conf
+Site defaults; see
+.BR CONFIGURATION .
+Installed once by
+.B make install
+with default values and never overwritten.
+.TP
 .I /var/run/reboot\-required
-Presence triggers a reboot. Created by package managers when kernel or
-library updates require a restart.
+Presence triggers a reboot. Written by
+.I /usr/share/update\-notifier/notify\-reboot\-required
+(package
+.BR update\-notifier\-common )
+when kernel or library updates require a restart.
 .TP
 .I /usr/local/bin/auto\-reboot
 Default installation location.
@@ -302,6 +331,13 @@ journalctl \-t auto\-reboot
 Part of the
 .B systemd
 package on every systemd\-managed host.
+.TP
+.B update\-notifier\-common
+Provides the hook that creates
+.IR /var/run/reboot\-required .
+Without it only the uptime threshold can trigger a reboot.
+.B make install
+installs the package when the hook is missing.
 .
 .SH SEE ALSO
 .BR systemd\-run (1),

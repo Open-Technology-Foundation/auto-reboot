@@ -9,17 +9,17 @@ shopt -s inherit_errexit
 declare -rx PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 
 # Script metadata
-declare -r VERSION=1.3.2
+declare -r VERSION=1.4.0
 #shellcheck disable=SC2155 # BCS0103 metadata pattern; a failed realpath here is not recoverable
 declare -r SCRIPT_PATH=$(realpath -- "$0")
 declare -r SCRIPT_NAME=${SCRIPT_PATH##*/}
 
-# Configuration defaults; env values are validated in main(), CLI options override them
-declare -- MACHINE_REBOOT_TIME=${MACHINE_REBOOT_TIME:-22:00}
-declare -- MACHINE_UPTIME_MAXDAYS=${MACHINE_UPTIME_MAXDAYS:-14}
+# Built-in defaults; CONF_FILE overrides them (read_conf), CLI options override both
+declare -- MACHINE_REBOOT_TIME=22:00 MACHINE_UPTIME_MAXDAYS=14 MACHINE_ALLOWED_DAYS=''
 declare -- PREFIX=${PREFIX:-/usr/local}
-# Overridable so the test suite can stand in for the packaging flag file
+# Overridable so the test suite can stand in for the system files
 declare -r REBOOT_REQUIRED_FILE=${REBOOT_REQUIRED_FILE:-/var/run/reboot-required}
+declare -r CONF_FILE=${AUTO_REBOOT_CONF:-/etc/$SCRIPT_NAME.conf}
 
 # Runtime state (frozen readonly after argument parsing)
 declare -i REBOOT_NEEDED=0 DRY_RUN=1 FORCE_REBOOT=0 UPTIME_DAYS=0
@@ -120,20 +120,20 @@ SCHEDULE MANAGEMENT:
                   Dry run (default) only lists what would be deleted;
                   -N -D asks for confirmation, then deletes (-N before -D)
 
-ENVIRONMENT VARIABLES:
-    MACHINE_REBOOT_TIME
-                  Time to schedule reboot (default: 22:00)
-                  Overridden by --reboot-time option
-    MACHINE_UPTIME_MAXDAYS
-                  Maximum uptime in days (default: 14)
-                  Overridden by --max-uptime-days option
-    Both are validated at startup and carried across the sudo re-exec.
+CONFIGURATION:
+    $CONF_FILE
+                  Site defaults, sourced as bash. Must be owned by root and
+                  not group- or world-writable. No other path is searched.
+                    MACHINE_REBOOT_TIME=22:00      overridden by --reboot-time
+                    MACHINE_UPTIME_MAXDAYS=14      overridden by --max-uptime-days
+                    MACHINE_ALLOWED_DAYS=          overridden by --allowed-days
     PREFIX        Installation prefix for --install (default: /usr/local)
 
 EXIT STATUS:
-    0  success                 13  not root and not in the sudo group
+    0  success                 13  not root/sudo group, or untrusted config file
     1  runtime failure         18  systemd-run not found
-    2  unexpected argument     22  invalid option or option value
+    2  unexpected argument     19  config file failed to load or has a bad value
+                               22  invalid option or option value
 
 EXAMPLES:
     $SCRIPT_NAME --dry-run
@@ -454,25 +454,45 @@ install_auto_reboot() {
        "Run 'make install' from the source directory for the manpage and bash completion"
 }
 
+# Site defaults from CONF_FILE (BCS0111, deliberately a single system path:
+# this script runs as root, so no user-writable location is ever searched).
+# The file is sourced as bash, so it is refused unless root can trust it,
+# and a file that fails to source is fatal rather than half-applied.
+# Returns 1 only when there is no file.
+read_conf() {
+  local -- owner mode
+  [[ -f $CONF_FILE ]] || return 1
+  read -r owner mode < <(stat -c '%u %a' -- "$CONF_FILE") \
+    || die 1 "Cannot stat ${CONF_FILE@Q}"
+  # String compare: a non-numeric uid must fail, not coerce to 0
+  [[ $owner == 0 ]] || die 13 "${CONF_FILE@Q} must be owned by root"
+  (( (8#$mode & 8#022) == 0 )) || die 13 "${CONF_FILE@Q} must not be group- or world-writable"
+  #shellcheck source=/dev/null
+  source "$CONF_FILE" || die 19 "Failed to load ${CONF_FILE@Q}"
+}
+
 # Re-exec as root via sudo for sudo-group members; called only where root is
-# needed (-N runs, delete, install). Env-derived settings are forwarded as
-# options because sudo's env_reset would drop the MACHINE_* variables.
-# Args: the original command line, replayed after the forwarded options
+# needed (-N runs, delete, install). Nothing is forwarded: the root re-exec
+# reads CONF_FILE itself, and sudo's env_reset carries no settings anyway.
+# Args: the original command line, replayed verbatim
 elevate_to_root() {
   ((EUID)) || return 0
   id -nG | grep -qw sudo || die 13 'Requires root or sudo group membership'
-  exec sudo -- "$SCRIPT_PATH" -r "$MACHINE_REBOOT_TIME" -m "$MACHINE_UPTIME_MAXDAYS" "$@"
+  exec sudo -- "$SCRIPT_PATH" "$@"
 }
 
 main() {
   local -a args=("$@")  # replayed verbatim by elevate_to_root
 
-  # Env-derived defaults are validated before anything else, including elevation
+  # Config values are validated before anything else, including elevation
+  read_conf ||:
   validate_time "$MACHINE_REBOOT_TIME" \
-    || die 22 "MACHINE_REBOOT_TIME ${MACHINE_REBOOT_TIME@Q} is not a valid HH:MM time"
+    || die 19 "MACHINE_REBOOT_TIME ${MACHINE_REBOOT_TIME@Q} in ${CONF_FILE@Q} is not a valid HH:MM time"
   validate_days "$MACHINE_UPTIME_MAXDAYS" \
-    || die 22 "MACHINE_UPTIME_MAXDAYS ${MACHINE_UPTIME_MAXDAYS@Q} is not a positive integer"
+    || die 19 "MACHINE_UPTIME_MAXDAYS ${MACHINE_UPTIME_MAXDAYS@Q} in ${CONF_FILE@Q} is not a positive integer"
   MACHINE_UPTIME_MAXDAYS=$((10#$MACHINE_UPTIME_MAXDAYS))
+  [[ -z $MACHINE_ALLOWED_DAYS ]] || parse_allowed_days "$MACHINE_ALLOWED_DAYS" \
+    || die 19 "MACHINE_ALLOWED_DAYS ${MACHINE_ALLOWED_DAYS@Q} in ${CONF_FILE@Q} is not a valid day list"
 
   # Parse command line arguments
   while (($#)); do
@@ -537,7 +557,7 @@ main() {
   (($#)) && die 2 "Unexpected argument ${1@Q}" ||:
 
   # Freeze configuration after argument parsing
-  readonly -- MACHINE_REBOOT_TIME MACHINE_UPTIME_MAXDAYS
+  readonly -- MACHINE_REBOOT_TIME MACHINE_UPTIME_MAXDAYS MACHINE_ALLOWED_DAYS
   readonly -- DRY_RUN FORCE_REBOOT VERBOSE
   readonly -a ALLOWED_DAYS
 

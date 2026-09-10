@@ -318,40 +318,6 @@ teardown() {
   assert_output_contains "Unexpected argument"
 }
 
-# ── Environment overrides ────────────────────────────────────────
-
-@test "cli: MACHINE_REBOOT_TIME=25:00 exits 22" {
-  MACHINE_REBOOT_TIME=25:00 run_script -f
-  [[ "$status" -eq 22 ]]
-  assert_output_contains "MACHINE_REBOOT_TIME"
-}
-
-@test "cli: MACHINE_REBOOT_TIME=08:00 is accepted" {
-  MACHINE_REBOOT_TIME=08:00 run_script -f
-  [[ "$status" -eq 0 ]]
-  assert_output_contains "Delay:"
-}
-
-@test "cli: MACHINE_UPTIME_MAXDAYS=0 exits 22" {
-  MACHINE_UPTIME_MAXDAYS=0 run_script
-  [[ "$status" -eq 22 ]]
-  assert_output_contains "MACHINE_UPTIME_MAXDAYS"
-}
-
-@test "cli: MACHINE_UPTIME_MAXDAYS=abc exits 22" {
-  MACHINE_UPTIME_MAXDAYS=abc run_script
-  [[ "$status" -eq 22 ]]
-  assert_output_contains "MACHINE_UPTIME_MAXDAYS"
-}
-
-@test "cli: MACHINE_UPTIME_MAXDAYS=1 triggers reboot on a 10-day uptime" {
-  create_mock_uptime "$(date -d '10 days ago' +'%Y-%m-%d %H:%M:%S')"
-  rm -f "$MOCK_BIN"/date
-  MACHINE_UPTIME_MAXDAYS=1 run_script
-  [[ "$status" -eq 0 ]]
-  assert_output_contains "Reboot required"
-}
-
 # ── Delete-all through the CLI ───────────────────────────────────
 
 @test "cli: -D with timers previews in default dry-run mode" {
@@ -413,8 +379,8 @@ teardown() {
   ((EUID)) || skip 'running as root'
   run bash -c 'source "$1"; main -Nf -r 03:00' "$SCRIPT_UNDER_TEST" "$(_sanitize_script)"
   [[ "$status" -eq 0 ]]
-  # Forwarded -r/-m carry the parsed values; the original arguments follow verbatim
-  assert_mock_called "sudo -- .*auto-reboot -r 03:00 -m 14 -Nf -r 03:00"
+  # Nothing is forwarded: the root re-exec reads the config file itself
+  assert_mock_called "sudo -- .*auto-reboot -Nf -r 03:00$"
 }
 
 @test "cli: -D in dry run as non-root does not elevate" {

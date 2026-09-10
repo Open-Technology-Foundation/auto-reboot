@@ -125,10 +125,12 @@ teardown() {
   assert_output_contains "--delete-all"
 }
 
-@test "usage shows environment variables" {
+@test "usage shows the config file and its keys" {
   run usage
+  assert_output_contains "$CONF_FILE"
   assert_output_contains "MACHINE_REBOOT_TIME"
   assert_output_contains "MACHINE_UPTIME_MAXDAYS"
+  assert_output_contains "MACHINE_ALLOWED_DAYS"
 }
 
 @test "usage shows allowed-days option" {
@@ -181,16 +183,15 @@ teardown() {
 
 # ── elevate_to_root ──────────────────────────────────────────────
 
-@test "elevate_to_root: forwards time and days through sudo" {
+@test "elevate_to_root: replays the original arguments through sudo" {
   ((EUID)) || skip 'running as root'
   create_mock_sudo
   create_mock_id sudo
   # Fresh shell: source_script() replaces elevate_to_root with a no-op
-  run env MACHINE_REBOOT_TIME=04:20 MACHINE_UPTIME_MAXDAYS=7 \
-    bash -c 'source "$1"; elevate_to_root --allowed-days Sun' \
+  run bash -c 'source "$1"; elevate_to_root -Nf --allowed-days Sun' \
     "$SCRIPT_UNDER_TEST" "$TEST_TEMP_DIR/auto-reboot-sanitized"
   [[ "$status" -eq 0 ]]
-  assert_mock_called "sudo -- .*auto-reboot -r 04:20 -m 7 --allowed-days Sun"
+  assert_mock_called "sudo -- .*auto-reboot -Nf --allowed-days Sun$"
 }
 
 @test "elevate_to_root: dies 13 when not in sudo group" {

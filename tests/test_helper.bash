@@ -1,4 +1,4 @@
-#
+#!/usr/bin/env bash
 # test_helper.bash - Common test utilities for auto-reboot BATS tests
 #
 # Provides:
@@ -28,7 +28,7 @@ ORIG_PATH=$PATH
 
 # Version comes from the script; there is no second copy to keep in sync
 VERSION=$(sed -n 's/^declare -r VERSION=//p' "$SCRIPT_UNDER_TEST")
-export VERSION
+export VERSION  # keeps shellcheck SC2034 quiet: the consumers are the bats files
 
 # Mock creators
 
@@ -52,8 +52,8 @@ create_mock_systemctl() {
 echo "systemctl \$*" >> "\${MOCK_LOG:-/dev/null}"
 case \$1 in
   is-system-running) echo running; exit 0 ;;
-  list-timers) printf '%s\n' "${timer_output}" ;;
-  stop) exit ${stop_rc} ;;
+  list-timers) printf '%s\n' "$timer_output" ;;
+  stop) exit $stop_rc ;;
   *) exit 0 ;;
 esac
 MOCK
@@ -82,8 +82,8 @@ create_mock_date() {
   local -i fixed_weekday=${2:-3}
   cat > "$MOCK_BIN"/date <<MOCK
 #!/usr/bin/env bash
-FIXED_EPOCH=${fixed_epoch}
-FIXED_WEEKDAY=${fixed_weekday}
+FIXED_EPOCH=$fixed_epoch
+FIXED_WEEKDAY=$fixed_weekday
 DAY_START=\$(( FIXED_EPOCH - (FIXED_EPOCH % 86400) ))
 
 parse_hm() {
@@ -124,7 +124,7 @@ create_mock_uptime() {
 #!/usr/bin/env bash
 echo "uptime \$*" >> "\${MOCK_LOG:-/dev/null}"
 case \$1 in
-  -s) echo "${boot_time}" ;;
+  -s) echo "$boot_time" ;;
   -p) echo 'up 10 days, 5 hours' ;;
   *)  echo ' 10:00:00 up 10 days,  5:00,  1 user,  load average: 0.00, 0.00, 0.00' ;;
 esac
@@ -142,12 +142,33 @@ MOCK
   chmod +x "$MOCK_BIN"/sudo
 }
 
+# create_mock_apt_get [RC] — logs the apt-get command line, exits RC (default 0)
+create_mock_apt_get() {
+  local -i rc=${1:-0}
+  cat > "$MOCK_BIN"/apt-get <<MOCK
+#!/usr/bin/env bash
+echo "apt-get \$*" >> "\${MOCK_LOG:-/dev/null}"
+exit $rc
+MOCK
+  chmod +x "$MOCK_BIN"/apt-get
+}
+
+# create_mock_stat [OUTPUT] — `stat -c '%u %a'` output (default: root-owned 0644)
+create_mock_stat() {
+  local -- output=${1:-0 644}
+  cat > "$MOCK_BIN"/stat <<MOCK
+#!/usr/bin/env bash
+echo '$output'
+MOCK
+  chmod +x "$MOCK_BIN"/stat
+}
+
 # create_mock_id [GROUPS] — `id -nG` output (default: member of sudo)
 create_mock_id() {
   local -- groups=${1:-sudo}
   cat > "$MOCK_BIN"/id <<MOCK
 #!/usr/bin/env bash
-echo '${groups}'
+echo '$groups'
 MOCK
   chmod +x "$MOCK_BIN"/id
 }
@@ -179,6 +200,7 @@ _common_setup() {
 
   # Absent by default: every test starts from "no reboot-required"
   REBOOT_REQUIRED_FILE="$TEST_TEMP_DIR"/var/run/reboot-required
+  AUTO_REBOOT_CONF="$TEST_TEMP_DIR"/auto-reboot.conf
   PREFIX="$TEST_TEMP_DIR"/prefix
 
   # Always needed: the script calls logger on every state change
@@ -186,7 +208,7 @@ _common_setup() {
 
   # MOCK_LOG reaches the mock binaries; the rest reach functions sourced
   # inside setup() (declare there is function-local, see source_script)
-  export TEST_TEMP_DIR MOCK_BIN MOCK_LOG REBOOT_REQUIRED_FILE PREFIX
+  export TEST_TEMP_DIR MOCK_BIN MOCK_LOG REBOOT_REQUIRED_FILE AUTO_REBOOT_CONF PREFIX
 }
 
 _common_teardown() {
@@ -223,11 +245,12 @@ _sanitize_script() {
 # functions need afterwards are exported here so they persist as globals.
 source_script() {
   local -- sanitized
-  sanitized=$(_sanitize_script)
+  sanitized=$(_sanitize_script) || return 1
 
   export PATH="$MOCK_BIN:$ORIG_PATH"
   export SCRIPT_PATH=$SCRIPT_UNDER_TEST
   export SCRIPT_NAME=auto-reboot
+  export CONF_FILE=$AUTO_REBOOT_CONF
   export XUSER=${USER:-testuser}
   export RED='' CYAN='' YELLOW='' NC=''
   export VERBOSE=1
@@ -245,7 +268,7 @@ source_script() {
 # own metadata (SCRIPT_PATH, SCRIPT_NAME, VERSION, XUSER) resolves unchanged.
 run_script() {
   local -- sanitized
-  sanitized=$(_sanitize_script)
+  sanitized=$(_sanitize_script) || return 1
 
   run bash -c '
     export PATH="$1"

@@ -11,7 +11,7 @@ declare -r TESTS_DIR="$SCRIPT_DIR"/tests
 command -v bats &>/dev/null || { >&2 echo 'bats not found. Install with: sudo apt install bats'; exit 18; }
 
 # Suites in dependency order: low-level helpers first
-declare -ar SUITES=(utility parse_days reboot_delay conditions schedule cli)
+declare -ar SUITES=(utility parse_days reboot_delay conditions schedule cli config makefile)
 declare -a TEST_FILES=()
 declare -- arg suite
 
